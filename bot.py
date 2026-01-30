@@ -702,7 +702,7 @@ async def book_machine(query):
                 cookies_closed = True
                 await query.message.reply_text("✅ Cookies закрыты принудительно перед нажатием Continue")
         
-        # 8. Ищем и нажимаем кнопку Continue НА ФОРМЕ (ОСОБОЕ ВНИМАНИЕ!)
+        # 8. Ищем и нажимаем кнопку Continue на форме контактной информации
         await query.edit_message_text("🔍 Ищу кнопку Continue на форме...")
         
         # Делаем скриншот формы перед поиском кнопки
@@ -714,26 +714,85 @@ async def book_machine(query):
                 caption="📸 Форма перед поиском кнопки Continue"
             )
         
-        submit_clicked = False
+        continue_submit_clicked = False
         
-        # СПЕЦИАЛЬНЫЙ ПОИСК КНОПКИ CONTINUE
-        
-        # 1. Ищем по точному тексту "Завершить запись" (ВЫСОКИЙ ПРИОРИТЕТ)
+        # ПОИСК КНОПКИ CONTINUE НА ФОРМЕ КОНТАКТНОЙ ИНФОРМАЦИИ
         try:
-            final_buttons = driver.find_elements(By.XPATH, 
-                "//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'завершить запись')] | " +
-                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'complete the appointment')]"
+            # Ищем все кнопки и ссылки с текстом "Continue" или "Продолжить"
+            continue_elements = driver.find_elements(By.XPATH, 
+                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')] | " +
+                "//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'продолжить')]"
             )
             
-            for btn in final_buttons:
+            for elem in continue_elements:
+                if elem.is_displayed() and elem.is_enabled():
+                    elem_text = elem.text.strip().lower()
+                    if 'continue' in elem_text or 'продолжить' in elem_text:
+                        # Прокручиваем к элементу
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+                        time.sleep(1)
+                        
+                        # Делаем скриншот перед кликом
+                        before_click = "/tmp/dikidi_continue_button.png"
+                        driver.save_screenshot(before_click)
+                        
+                        # Кликаем
+                        try:
+                            elem.click()
+                        except:
+                            driver.execute_script("arguments[0].click();", elem)
+                        
+                        continue_submit_clicked = True
+                        await query.message.reply_text(f"✅ Нажата кнопка Continue на форме: '{elem.text}'")
+                        
+                        with open(before_click, 'rb') as photo:
+                            await query.message.reply_photo(
+                                photo=photo,
+                                caption="📸 Кнопка Continue на форме найдена и нажата"
+                            )
+                        
+                        time.sleep(3)
+                        break
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ Ошибка поиска Continue на форме: {e}")
+        
+        # 9. Ждем загрузки финальной страницы с кнопкой "Complete the appointment"
+        if continue_submit_clicked:
+            await query.edit_message_text("⏳ Жду загрузки финальной страницы...")
+            time.sleep(3)
+            
+            # Делаем скриншот финальной страницы
+            final_page_screenshot = "/tmp/dikidi_final_page.png"
+            driver.save_screenshot(final_page_screenshot)
+            with open(final_page_screenshot, 'rb') as photo:
+                await query.message.reply_photo(
+                    photo=photo,
+                    caption="📸 Финальная страница перед Complete the appointment"
+                )
+        
+        # 10. Ищем и нажимаем кнопку "Complete the appointment"
+        await query.edit_message_text("🔍 Ищу кнопку Complete the appointment...")
+        
+        final_submit_clicked = False
+        
+        # ПОИСК КНОПКИ "COMPLETE THE APPOINTMENT"
+        
+        # 1. Ищем по точному тексту "Complete the appointment"
+        try:
+            complete_buttons = driver.find_elements(By.XPATH, 
+                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'complete the appointment')] | " +
+                "//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'завершить запись')]"
+            )
+            
+            for btn in complete_buttons:
                 if btn.is_displayed() and btn.is_enabled():
                     # Прокручиваем к кнопке
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                     time.sleep(1)
                     
                     # Делаем скриншот перед кликом
-                    before_click = "/tmp/dikidi_final_button.png"
-                    driver.save_screenshot(before_click)
+                    before_final_click = "/tmp/dikidi_complete_button.png"
+                    driver.save_screenshot(before_final_click)
                     
                     # Кликаем
                     try:
@@ -741,67 +800,35 @@ async def book_machine(query):
                     except:
                         driver.execute_script("arguments[0].click();", btn)
                     
-                    submit_clicked = True
-                    await query.message.reply_text(f"✅ Нажата кнопка завершения: '{btn.text}'")
+                    final_submit_clicked = True
+                    await query.message.reply_text(f"✅ Нажата кнопка Complete the appointment: '{btn.text}'")
                     
-                    with open(before_click, 'rb') as photo:
+                    with open(before_final_click, 'rb') as photo:
                         await query.message.reply_photo(
                             photo=photo,
-                            caption="📸 Кнопка 'Завершить запись' найдена и нажата"
+                            caption="📸 Кнопка Complete the appointment найдена и нажата"
                         )
                     
                     time.sleep(3)
                     break
         except Exception as e:
-            await query.message.reply_text(f"⚠️ Ошибка поиска 'Завершить запись': {e}")
+            await query.message.reply_text(f"⚠️ Ошибка поиска Complete the appointment: {e}")
         
-        # 2. Ищем по точным классам из HTML
-        if not submit_clicked:
+        # 2. Ищем по частичному совпадению
+        if not final_submit_clicked:
             try:
-                final_links = driver.find_elements(By.CSS_SELECTOR, 
-                    "a.nr-continue, a.btn-stylized, .nr-continue, .btn-default, .nrs-gradient, .nr-shimmer"
-                )
+                partial_texts = ['complete', 'appointment', 'завершить', 'запись', 'готово']
                 
-                for link in final_links:
-                    if link.is_displayed() and link.is_enabled():
-                        link_text = link.text.strip().lower()
-                        
-                        # Проверяем текст ссылки
-                        if 'завершить' in link_text or 'complete' in link_text or 'finish' in link_text or 'готово' in link_text:
-                            # Прокручиваем к ссылке
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
-                            time.sleep(1)
-                            
-                            # Пробуем разные способы клика
-                            try:
-                                link.click()
-                            except:
-                                driver.execute_script("arguments[0].click();", link)
-                            
-                            submit_clicked = True
-                            await query.message.reply_text(f"✅ Нажата ссылка завершения (класс), текст: '{link.text}'")
-                            time.sleep(3)
-                            break
-            except Exception as e:
-                await query.message.reply_text(f"⚠️ Ошибка поиска по классу: {e}")
-        
-        # 3. Ищем все ссылки с классами из HTML
-        if not submit_clicked:
-            try:
-                # Комбинированный поиск по всем классам
-                combined_selectors = [
-                    "a.btn.btn-default.btn-stylized.nrs-gradient.nr-continue.nr-shimmer",
-                    "a.btn-default.btn-stylized",
-                    "a.nrs-gradient",
-                    "a.nr-shimmer"
-                ]
-                
-                for selector in combined_selectors:
-                    try:
-                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                        for elem in elements:
-                            if elem.is_displayed() and elem.is_enabled():
-                                # Прокручиваем
+                for text in partial_texts:
+                    elements = driver.find_elements(By.XPATH, 
+                        f"//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяabcdefghijklmnopqrstuvwxyz'), '{text}')]"
+                    )
+                    
+                    for elem in elements:
+                        if elem.is_displayed() and elem.is_enabled():
+                            elem_text = elem.text.strip().lower()
+                            # Проверяем, что это действительно кнопка завершения
+                            if 'complete' in elem_text or 'appointment' in elem_text or 'завершить' in elem_text:
                                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
                                 time.sleep(1)
                                 
@@ -810,55 +837,17 @@ async def book_machine(query):
                                 except:
                                     driver.execute_script("arguments[0].click();", elem)
                                 
-                                submit_clicked = True
-                                await query.message.reply_text(f"✅ Нажата по комбинированному селектору {selector}: '{elem.text}'")
+                                final_submit_clicked = True
+                                await query.message.reply_text(f"✅ Нажата кнопка по частичному тексту '{text}': '{elem.text}'")
                                 time.sleep(3)
                                 break
-                        if submit_clicked:
-                            break
-                    except:
-                        continue
-            except Exception as e:
-                await query.message.reply_text(f"⚠️ Ошибка комбинированного поиска: {e}")
-        
-        # 4. Ищем все кнопки и ссылки с текстом завершения
-        if not submit_clicked:
-            try:
-                # Поиск по частичным совпадениям
-                partial_texts = ['завершить', 'запись', 'complete', 'appointment', 'готово', 'закончить', 'финиш']
-                
-                for text in partial_texts:
-                    try:
-                        elements = driver.find_elements(By.XPATH, 
-                            f"//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяabcdefghijklmnopqrstuvwxyz'), '{text}')]"
-                        )
-                        
-                        for elem in elements:
-                            if elem.is_displayed() and elem.is_enabled():
-                                # Проверяем, что это кликабельный элемент
-                                tag_name = elem.tag_name.lower()
-                                if tag_name in ['a', 'button', 'input']:
-                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
-                                    time.sleep(1)
-                                    
-                                    try:
-                                        elem.click()
-                                    except:
-                                        driver.execute_script("arguments[0].click();", elem)
-                                    
-                                    submit_clicked = True
-                                    await query.message.reply_text(f"✅ Нажата кнопка по тексту '{text}': '{elem.text[:30]}...'")
-                                    time.sleep(3)
-                                    break
-                        if submit_clicked:
-                            break
-                    except:
-                        continue
+                    if final_submit_clicked:
+                        break
             except Exception as e:
                 await query.message.reply_text(f"⚠️ Ошибка поиска по частичным совпадениям: {e}")
         
-        # 5. Ищем все кнопки и ссылки на странице
-        if not submit_clicked:
+        # 3. Ищем все кнопки и ссылки на странице
+        if not final_submit_clicked:
             try:
                 all_clickable = driver.find_elements(By.XPATH, "//a | //button | //input[@type='submit']")
                 
@@ -866,7 +855,8 @@ async def book_machine(query):
                     try:
                         if elem.is_displayed() and elem.is_enabled():
                             elem_text = elem.text.strip().lower()
-                            if elem_text and ('завершить' in elem_text or 'готово' in elem_text or 'записаться' in elem_text):
+                            # Ищем кнопки с текстом, связанным с завершением
+                            if elem_text and ('complete' in elem_text or 'finish' in elem_text or 'готово' in elem_text or 'завершить' in elem_text):
                                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
                                 time.sleep(1)
                                 
@@ -875,8 +865,8 @@ async def book_machine(query):
                                 except:
                                     driver.execute_script("arguments[0].click();", elem)
                                 
-                                submit_clicked = True
-                                await query.message.reply_text(f"✅ Нажата общая кнопка: '{elem.text}'")
+                                final_submit_clicked = True
+                                await query.message.reply_text(f"✅ Нажата общая кнопка завершения: '{elem.text}'")
                                 time.sleep(3)
                                 break
                     except:
@@ -885,31 +875,16 @@ async def book_machine(query):
                 await query.message.reply_text(f"⚠️ Ошибка общего поиска: {e}")
         
         # Если всё еще не найдено, делаем дополнительный скриншот для отладки
-        if not submit_clicked:
+        if not final_submit_clicked:
             debug_screenshot = "/tmp/dikidi_debug_final.png"
             driver.save_screenshot(debug_screenshot)
             with open(debug_screenshot, 'rb') as photo:
                 await query.message.reply_photo(
                     photo=photo,
-                    caption="⚠️ Финальная кнопка не найдена. Скриншот для отладки"
+                    caption="⚠️ Финальная кнопка Complete the appointment не найдена. Скриншот для отладки"
                 )
-            
-            # Отправляем HTML для отладки
-            try:
-                page_html = driver.page_source[:3000]
-                html_path = "/tmp/dikidi_html.html"
-                with open(html_path, 'w', encoding='utf-8') as f:
-                    f.write(page_html)
-                
-                await query.message.reply_text("📄 Отправляю HTML для отладки...")
-                await query.message.reply_document(
-                    document=open(html_path, 'rb'),
-                    filename="dikidi_page.html"
-                )
-            except Exception as e:
-                await query.message.reply_text(f"⚠️ Не удалось сохранить HTML: {e}")
         
-        # 9. Проверяем результат
+        # 11. Проверяем результат
         await query.edit_message_text("🔍 Проверяю результат бронирования...")
         time.sleep(3)
         
@@ -963,7 +938,7 @@ async def book_machine(query):
         
         await query.edit_message_text(result_message)
         
-        # 10. Отправляем итоговый отчет
+        # 12. Отправляем итоговый отчет
         await query.message.reply_text(
             f"📊 ИТОГОВЫЙ ОТЧЕТ:\n"
             f"• Cookies закрыты: {'✅' if cookies_closed else '❌'}\n"
@@ -974,7 +949,8 @@ async def book_machine(query):
             f"• Фамилия заполнена: {'✅' if surname_filled else '❌'}\n"
             f"• Телефон заполнен: {'✅' if phone_filled else '❌'}\n"
             f"• Комментарий заполнен: {'✅' if comment_filled else '❌'}\n"
-            f"• Финальная кнопка нажата: {'✅' if submit_clicked else '❌'}\n"
+            f"• Кнопка Continue на форме: {'✅' if continue_submit_clicked else '❌'}\n"
+            f"• Кнопка Complete the appointment: {'✅' if final_submit_clicked else '❌'}\n"
             f"• Результат: {'✅ Успех' if success else '⚠️ Неясно' if not error else '❌ Ошибка'}"
         )
             
