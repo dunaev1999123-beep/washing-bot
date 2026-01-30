@@ -10,7 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 
 # Настройка логирования
 logging.basicConfig(
@@ -26,7 +26,7 @@ TARGET_URL = os.getenv('TARGET_URL', 'https://dikidi.net/1613380?p=4.pi-po-ssm-s
 FORM_NAME = os.getenv('FORM_NAME', 'Константин')
 FORM_SURNAME = os.getenv('FORM_SURNAME', 'Дунаев')
 FORM_COMMENT = os.getenv('FORM_COMMENT', '526')
-FORM_PHONE = os.getenv('FORM_PHONE', '9955542240')
+FORM_PHONE = os.getenv('FORM_PHONE', '9955542240')  # Без +7, сайт сам добавляет
 
 # Проверка переменных
 if not BOT_TOKEN:
@@ -423,7 +423,7 @@ async def book_machine(query):
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
-        # 2. Агрессивно закрываем cookies окно (ОЧЕНЬ ВАЖНО!)
+        # 2. Агрессивно закрываем cookies окно
         await query.edit_message_text("🍪 Закрываю cookies окно...")
         cookies_closed = False
         
@@ -442,10 +442,6 @@ async def book_machine(query):
                 cookies_closed = True
                 await query.message.reply_text("✅ Cookies закрыты принудительным методом")
                 break
-            
-            # Делаем скриншот для отладки
-            debug_screenshot = f"/tmp/cookies_attempt_{attempt}.png"
-            driver.save_screenshot(debug_screenshot)
             
             time.sleep(1)
         
@@ -607,7 +603,7 @@ async def book_machine(query):
             await query.edit_message_text("📝 Жду загрузки формы записи...")
             time.sleep(3)
         
-        # 6. Ищем и заполняем форму (упрощенная версия - ищем все inputs по порядку)
+        # 6. Ищем и заполняем форму
         await query.edit_message_text("📋 Заполняю форму...")
         
         # Находим все видимые поля ввода
@@ -625,40 +621,60 @@ async def book_machine(query):
         
         for field in all_fields:
             try:
-                if field.is_displayed() and field.is_enabled():
-                    field_type = field.get_attribute('type') or 'text'
-                    
-                    # Пропускаем ненужные типы полей
-                    if field_type in ['hidden', 'checkbox', 'radio', 'submit', 'button']:
-                        continue
-                    
-                    # Очищаем поле
-                    field.clear()
-                    
-                    # Заполняем по порядку
-                    if field_counter == 0:  # Первое поле - имя
-                        field.send_keys(FORM_NAME)
-                        name_filled = True
-                        await query.message.reply_text(f"✅ Заполнено имя: {FORM_NAME}")
-                        
-                    elif field_counter == 1:  # Второе поле - фамилия
-                        field.send_keys(FORM_SURNAME)
-                        surname_filled = True
-                        await query.message.reply_text(f"✅ Заполнена фамилия: {FORM_SURNAME}")
-                        
-                    elif field_counter == 2:  # Третье поле - телефон
-                        field.send_keys(FORM_PHONE)
-                        phone_filled = True
-                        await query.message.reply_text(f"✅ Заполнен телефон: {FORM_PHONE}")
-                        
-                    elif field_counter == 3:  # Четвертое поле - комментарий
-                        field.send_keys(FORM_COMMENT)
-                        comment_filled = True
-                        await query.message.reply_text(f"✅ Заполнен комментарий: {FORM_COMMENT}")
-                        break  # Заполнили все нужные поля
-                    
+                if not field.is_displayed() or not field.is_enabled():
+                    continue
+                
+                field_type = field.get_attribute('type') or 'text'
+                
+                # Пропускаем ненужные типы полей
+                if field_type in ['hidden', 'checkbox', 'radio', 'submit', 'button']:
+                    continue
+                
+                # Очищаем поле
+                field.clear()
+                time.sleep(0.3)
+                
+                # Определяем, что заполнять, по порядку и типу поля
+                if field_counter == 0 and field_type == 'text':  # Первое текстовое поле - имя
+                    field.send_keys(FORM_NAME)
+                    name_filled = True
+                    await query.message.reply_text(f"✅ Заполнено имя: {FORM_NAME}")
                     field_counter += 1
-                    time.sleep(0.5)
+                    
+                elif field_counter == 1 and field_type == 'text':  # Второе текстовое поле - фамилия
+                    field.send_keys(FORM_SURNAME)
+                    surname_filled = True
+                    await query.message.reply_text(f"✅ Заполнена фамилия: {FORM_SURNAME}")
+                    field_counter += 1
+                    
+                elif field_type == 'tel' or 'phone' in (field.get_attribute('name') or '').lower():  # Поле телефона
+                    # Особенная обработка телефона
+                    phone_to_send = FORM_PHONE
+                    
+                    # Пробуем ввести телефон разными способами
+                    try:
+                        # Способ 1: Просто отправляем цифры
+                        field.send_keys(phone_to_send)
+                        time.sleep(0.5)
+                        
+                        # Проверяем, что телефон ввелся
+                        current_value = field.get_attribute('value')
+                        if not current_value or phone_to_send not in current_value:
+                            # Способ 2: Очищаем и пробуем снова
+                            field.clear()
+                            time.sleep(0.5)
+                            field.send_keys("7" + phone_to_send)  # Добавляем 7 в начало
+                            time.sleep(0.5)
+                            
+                        phone_filled = True
+                        await query.message.reply_text(f"✅ Заполнен телефон: {phone_to_send}")
+                    except Exception as e:
+                        await query.message.reply_text(f"⚠️ Ошибка заполнения телефона: {e}")
+                    
+                elif field.tag_name == 'textarea':  # Поле комментария
+                    field.send_keys(FORM_COMMENT)
+                    comment_filled = True
+                    await query.message.reply_text(f"✅ Заполнен комментарий: {FORM_COMMENT}")
                     
             except Exception as e:
                 continue
@@ -676,7 +692,7 @@ async def book_machine(query):
                 cookies_closed = True
                 await query.message.reply_text("✅ Cookies закрыты принудительно перед нажатием Continue")
         
-        # 8. Ищем и нажимаем кнопку Continue НА ФОРМЕ
+        # 8. Ищем и нажимаем кнопку Continue НА ФОРМЕ (ОСОБОЕ ВНИМАНИЕ!)
         await query.edit_message_text("🔍 Ищу кнопку Continue на форме...")
         
         # Делаем скриншот формы перед поиском кнопки
@@ -690,66 +706,126 @@ async def book_machine(query):
         
         submit_clicked = False
         
-        # Сначала ищем ВСЕ кнопки на странице и проверяем их текст
-        all_buttons = driver.find_elements(By.TAG_NAME, "button")
-        all_inputs_submit = driver.find_elements(By.XPATH, "//input[@type='submit' or @type='button']")
-        all_submit_elements = all_buttons + all_inputs_submit
+        # СПЕЦИАЛЬНЫЙ ПОИСК КНОПКИ CONTINUE
         
-        for element in all_submit_elements:
-            try:
-                if not element.is_displayed() or not element.is_enabled():
-                    continue
-                
-                # Получаем текст элемента
-                element_text = ""
-                if element.tag_name == "button":
-                    element_text = element.text.strip()
-                elif element.tag_name == "input":
-                    element_text = element.get_attribute('value') or ''
-                
-                if not element_text:
-                    continue
-                
-                element_text_lower = element_text.lower()
-                
-                # Проверяем, похожа ли кнопка на "Continue"
-                if any(keyword in element_text_lower for keyword in ['continue', 'продолжить', 'далее', 'next', 'записаться', 'забронировать', 'подтвердить', 'отправить']):
-                    
+        # 1. Ищем по точному тексту "Continue"
+        try:
+            continue_buttons = driver.find_elements(By.XPATH, 
+                "//button[translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='continue' or translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя')='продолжить']"
+            )
+            
+            for btn in continue_buttons:
+                if btn.is_displayed() and btn.is_enabled():
                     # Прокручиваем к кнопке
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                     time.sleep(1)
                     
-                    # Делаем скриншот перед нажатием
-                    before_click = "/tmp/dikidi_before_continue_click.png"
+                    # Делаем скриншот
+                    before_click = "/tmp/dikidi_continue_button.png"
                     driver.save_screenshot(before_click)
                     
-                    # Пробуем кликнуть
+                    # Кликаем
                     try:
-                        element.click()
+                        btn.click()
                     except:
-                        driver.execute_script("arguments[0].click();", element)
+                        driver.execute_script("arguments[0].click();", btn)
                     
                     submit_clicked = True
-                    await query.message.reply_text(f"✅ Нажата кнопка: '{element_text}'")
+                    await query.message.reply_text("✅ Нажата кнопка Continue (точный поиск)")
                     
-                    # Отправляем скриншот
                     with open(before_click, 'rb') as photo:
                         await query.message.reply_photo(
                             photo=photo,
-                            caption=f"📸 Перед нажатием кнопки '{element_text}'"
+                            caption="📸 Кнопка Continue найдена и нажата"
                         )
                     
                     time.sleep(3)
                     break
-                    
-            except Exception as e:
-                continue
+        except:
+            pass
         
-        # 9. Если не нашли кнопку, пробуем альтернативные методы
+        # 2. Если не нашли, ищем по частичному совпадению
         if not submit_clicked:
-            await query.message.reply_text("⚠️ Не нашел кнопку стандартным методом, пробую альтернативы...")
-            
-            # Пробуем найти форму и отправить ее
+            try:
+                all_buttons = driver.find_elements(By.TAG_NAME, "button")
+                for btn in all_buttons:
+                    try:
+                        btn_text = btn.text.strip().lower()
+                        if btn_text and ('continue' in btn_text or 'продолжить' in btn_text):
+                            if btn.is_displayed() and btn.is_enabled():
+                                # Прокручиваем
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                                time.sleep(1)
+                                
+                                # Кликаем
+                                try:
+                                    btn.click()
+                                except:
+                                    driver.execute_script("arguments[0].click();", btn)
+                                
+                                submit_clicked = True
+                                await query.message.reply_text(f"✅ Нажата кнопка: '{btn.text}'")
+                                time.sleep(3)
+                                break
+                    except:
+                        continue
+            except:
+                pass
+        
+        # 3. Ищем input с type="submit"
+        if not submit_clicked:
+            try:
+                submit_inputs = driver.find_elements(By.XPATH, "//input[@type='submit']")
+                for inp in submit_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        inp_value = inp.get_attribute('value') or ''
+                        if inp_value and ('continue' in inp_value.lower() or 'продолжить' in inp_value.lower()):
+                            # Прокручиваем
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", inp)
+                            time.sleep(1)
+                            
+                            try:
+                                inp.click()
+                            except:
+                                driver.execute_script("arguments[0].click();", inp)
+                            
+                            submit_clicked = True
+                            await query.message.reply_text(f"✅ Нажата кнопка submit: '{inp_value}'")
+                            time.sleep(3)
+                            break
+            except:
+                pass
+        
+        # 4. Ищем любую кнопку после формы
+        if not submit_clicked:
+            try:
+                # Ищем все кнопки после заполненных полей
+                all_buttons = driver.find_elements(By.TAG_NAME, "button")
+                for btn in all_buttons:
+                    try:
+                        if btn.is_displayed() and btn.is_enabled():
+                            btn_text = btn.text.strip().lower()
+                            if btn_text and ('подтвердить' in btn_text or 'отправить' in btn_text or 'записаться' in btn_text or 'забронировать' in btn_text):
+                                # Прокручиваем
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                                time.sleep(1)
+                                
+                                try:
+                                    btn.click()
+                                except:
+                                    driver.execute_script("arguments[0].click();", btn)
+                                
+                                submit_clicked = True
+                                await query.message.reply_text(f"✅ Нажата кнопка: '{btn.text}'")
+                                time.sleep(3)
+                                break
+                    except:
+                        continue
+            except:
+                pass
+        
+        # 5. Альтернатива: отправка формы через JavaScript
+        if not submit_clicked:
             try:
                 forms = driver.find_elements(By.TAG_NAME, "form")
                 for form in forms:
@@ -764,7 +840,7 @@ async def book_machine(query):
             except:
                 pass
         
-        # 10. Проверяем результат
+        # 9. Проверяем результат
         await query.edit_message_text("🔍 Проверяю результат бронирования...")
         time.sleep(3)
         
@@ -818,7 +894,7 @@ async def book_machine(query):
         
         await query.edit_message_text(result_message)
         
-        # 11. Отправляем итоговый отчет
+        # 10. Отправляем итоговый отчет
         await query.message.reply_text(
             f"📊 ИТОГОВЫЙ ОТЧЕТ:\n"
             f"• Cookies закрыты: {'✅' if cookies_closed else '❌'}\n"
@@ -871,7 +947,7 @@ async def show_status(query):
         f"🌐 Chromium: настроен в headless-режиме\n\n"
         f"🔧 Функции:\n"
         f"• /start - меню бота\n"
-        f"• Проверка + скриншot\n"
+        f"• Проверка + скриншот\n"
         f"• Анализ страницы Dikidi\n"
         f"• Отладка элементов"
     )
