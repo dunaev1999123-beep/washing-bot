@@ -358,7 +358,17 @@ async def check_availability(query):
             
             await query.message.reply_text(button_info)
         
-        # 6. Проверяем наличие ключевых элементов Dikidi
+        # 6. Отправляем информацию о найденных ссылках
+        if links:
+            links_report = "🔗 Найденные ссылки (первые 10):\n"
+            for i, link in enumerate(links[:10]):
+                link_text = link.text.strip()[:30] if link.text else "без текста"
+                link_classes = link.get_attribute('class')[:30] if link.get_attribute('class') else "нет классов"
+                links_report += f"{i+1}. '{link_text}' (class: {link_classes})\n"
+            
+            await query.message.reply_text(links_report)
+        
+        # 7. Проверяем наличие ключевых элементов Dikidi
         await query.message.reply_text("🔎 Ищу элементы Dikidi...")
         
         dikidi_elements = {
@@ -708,137 +718,182 @@ async def book_machine(query):
         
         # СПЕЦИАЛЬНЫЙ ПОИСК КНОПКИ CONTINUE
         
-        # 1. Ищем по точному тексту "Continue"
+        # 1. Ищем по точному классу (ПЕРВЫЙ ПРИОРИТЕТ!)
         try:
-            continue_buttons = driver.find_elements(By.XPATH, 
-                "//button[translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='continue' or translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя')='продолжить']"
+            continue_links = driver.find_elements(By.CSS_SELECTOR, 
+                "a.nr-continue, a.btn-stylized, .nr-actions a, a[class*='continue']"
             )
             
-            for btn in continue_buttons:
-                if btn.is_displayed() and btn.is_enabled():
-                    # Прокручиваем к кнопке
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                    time.sleep(1)
+            for link in continue_links:
+                if link.is_displayed() and link.is_enabled():
+                    link_text = link.text.strip().lower()
                     
-                    # Делаем скриншот
-                    before_click = "/tmp/dikidi_continue_button.png"
-                    driver.save_screenshot(before_click)
-                    
-                    # Кликаем
-                    try:
-                        btn.click()
-                    except:
-                        driver.execute_script("arguments[0].click();", btn)
-                    
-                    submit_clicked = True
-                    await query.message.reply_text("✅ Нажата кнопка Continue (точный поиск)")
-                    
-                    with open(before_click, 'rb') as photo:
-                        await query.message.reply_photo(
-                            photo=photo,
-                            caption="📸 Кнопка Continue найдена и нажата"
-                        )
-                    
-                    time.sleep(3)
-                    break
-        except:
-            pass
-        
-        # 2. Если не нашли, ищем по частичному совпадению
-        if not submit_clicked:
-            try:
-                all_buttons = driver.find_elements(By.TAG_NAME, "button")
-                for btn in all_buttons:
-                    try:
-                        btn_text = btn.text.strip().lower()
-                        if btn_text and ('continue' in btn_text or 'продолжить' in btn_text):
-                            if btn.is_displayed() and btn.is_enabled():
-                                # Прокручиваем
-                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                                time.sleep(1)
-                                
-                                # Кликаем
-                                try:
-                                    btn.click()
-                                except:
-                                    driver.execute_script("arguments[0].click();", btn)
-                                
-                                submit_clicked = True
-                                await query.message.reply_text(f"✅ Нажата кнопка: '{btn.text}'")
-                                time.sleep(3)
-                                break
-                    except:
-                        continue
-            except:
-                pass
-        
-        # 3. Ищем input с type="submit"
-        if not submit_clicked:
-            try:
-                submit_inputs = driver.find_elements(By.XPATH, "//input[@type='submit']")
-                for inp in submit_inputs:
-                    if inp.is_displayed() and inp.is_enabled():
-                        inp_value = inp.get_attribute('value') or ''
-                        if inp_value and ('continue' in inp_value.lower() or 'продолжить' in inp_value.lower()):
-                            # Прокручиваем
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", inp)
-                            time.sleep(1)
-                            
-                            try:
-                                inp.click()
-                            except:
-                                driver.execute_script("arguments[0].click();", inp)
-                            
-                            submit_clicked = True
-                            await query.message.reply_text(f"✅ Нажата кнопка submit: '{inp_value}'")
-                            time.sleep(3)
-                            break
-            except:
-                pass
-        
-        # 4. Ищем любую кнопку после формы
-        if not submit_clicked:
-            try:
-                # Ищем все кнопки после заполненных полей
-                all_buttons = driver.find_elements(By.TAG_NAME, "button")
-                for btn in all_buttons:
-                    try:
-                        if btn.is_displayed() and btn.is_enabled():
-                            btn_text = btn.text.strip().lower()
-                            if btn_text and ('подтвердить' in btn_text or 'отправить' in btn_text or 'записаться' in btn_text or 'забронировать' in btn_text):
-                                # Прокручиваем
-                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                                time.sleep(1)
-                                
-                                try:
-                                    btn.click()
-                                except:
-                                    driver.execute_script("arguments[0].click();", btn)
-                                
-                                submit_clicked = True
-                                await query.message.reply_text(f"✅ Нажата кнопка: '{btn.text}'")
-                                time.sleep(3)
-                                break
-                    except:
-                        continue
-            except:
-                pass
-        
-        # 5. Альтернатива: отправка формы через JavaScript
-        if not submit_clicked:
-            try:
-                forms = driver.find_elements(By.TAG_NAME, "form")
-                for form in forms:
-                    try:
-                        driver.execute_script("arguments[0].submit();", form)
+                    # Проверяем текст ссылки
+                    if 'продолжить' in link_text or 'continue' in link_text or link_text == '':
+                        # Прокручиваем к ссылке
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+                        time.sleep(1)
+                        
+                        # Делаем скриншот перед кликом
+                        before_click = "/tmp/dikidi_continue_link.png"
+                        driver.save_screenshot(before_click)
+                        
+                        # Пробуем разные способы клика
+                        try:
+                            link.click()
+                        except:
+                            driver.execute_script("arguments[0].click();", link)
+                        
                         submit_clicked = True
-                        await query.message.reply_text("✅ Форма отправлена через JavaScript submit()")
+                        await query.message.reply_text(f"✅ Нажата ссылка Continue (класс nr-continue), текст: '{link.text}'")
+                        
+                        with open(before_click, 'rb') as photo:
+                            await query.message.reply_photo(
+                                photo=photo,
+                                caption="📸 Кнопка Continue (ссылка) найдена и нажата"
+                            )
+                        
                         time.sleep(3)
                         break
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ Ошибка поиска по классу: {e}")
+        
+        # 2. Ищем по тексту "Продолжить" в любом элементе
+        if not submit_clicked:
+            try:
+                # Ищем все элементы с текстом "Продолжить" (регистронезависимо)
+                continue_elements = driver.find_elements(By.XPATH, 
+                    "//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'продолжить')] | " +
+                    "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]"
+                )
+                
+                for elem in continue_elements:
+                    if elem.is_displayed() and elem.is_enabled():
+                        # Прокручиваем к элементу
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+                        time.sleep(1)
+                        
+                        # Определяем тип элемента и кликаем
+                        tag_name = elem.tag_name.lower()
+                        try:
+                            if tag_name == 'a' or tag_name == 'button':
+                                elem.click()
+                            else:
+                                # Пробуем кликнуть по родителю
+                                parent = elem.find_element(By.XPATH, "./parent::*")
+                                if parent.tag_name.lower() in ['a', 'button']:
+                                    parent.click()
+                                else:
+                                    driver.execute_script("arguments[0].click();", elem)
+                        except:
+                            driver.execute_script("arguments[0].click();", elem)
+                        
+                        submit_clicked = True
+                        await query.message.reply_text(f"✅ Нажата кнопка по тексту: '{elem.text[:50]}...'")
+                        time.sleep(3)
+                        break
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка поиска по тексту: {e}")
+        
+        # 3. Ищем все ссылки в блоке nr-actions
+        if not submit_clicked:
+            try:
+                actions_div = driver.find_element(By.CSS_SELECTOR, ".nr-actions")
+                links_in_actions = actions_div.find_elements(By.TAG_NAME, "a")
+                
+                for link in links_in_actions:
+                    if link.is_displayed() and link.is_enabled():
+                        # Прокручиваем
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+                        time.sleep(1)
+                        
+                        try:
+                            link.click()
+                        except:
+                            driver.execute_script("arguments[0].click();", link)
+                        
+                        submit_clicked = True
+                        await query.message.reply_text(f"✅ Нажата ссылка в блоке nr-actions: '{link.text}'")
+                        time.sleep(3)
+                        break
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка поиска в nr-actions: {e}")
+        
+        # 4. Ищем по всем классам из HTML
+        if not submit_clicked:
+            try:
+                # Все возможные селекторы для этой кнопки
+                selectors = [
+                    "a.nr-continue",
+                    ".btn-stylized",
+                    ".btn-default",
+                    "a.btn",
+                    ".nr-actions .btn",
+                    "a[class*='gradient']"
+                ]
+                
+                for selector in selectors:
+                    try:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                # Проверяем, что это действительно кнопка продолжения
+                                elem_text = elem.text.strip().lower()
+                                if not elem_text or 'продолжить' in elem_text or 'continue' in elem_text:
+                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+                                    time.sleep(1)
+                                    
+                                    try:
+                                        elem.click()
+                                    except:
+                                        driver.execute_script("arguments[0].click();", elem)
+                                    
+                                    submit_clicked = True
+                                    await query.message.reply_text(f"✅ Нажата по селектору {selector}: '{elem.text}'")
+                                    time.sleep(3)
+                                    break
+                        if submit_clicked:
+                            break
                     except:
                         continue
-            except:
-                pass
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка поиска по селекторам: {e}")
+        
+        # 5. Ищем ВСЕ ссылки на странице и проверяем их текст
+        if not submit_clicked:
+            try:
+                all_links = driver.find_elements(By.TAG_NAME, "a")
+                for link in all_links:
+                    try:
+                        if link.is_displayed() and link.is_enabled():
+                            link_text = link.text.strip().lower()
+                            if 'продолжить' in link_text or 'continue' in link_text:
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+                                time.sleep(1)
+                                
+                                try:
+                                    link.click()
+                                except:
+                                    driver.execute_script("arguments[0].click();", link)
+                                
+                                submit_clicked = True
+                                await query.message.reply_text(f"✅ Нажата ссылка (общий поиск): '{link.text}'")
+                                time.sleep(3)
+                                break
+                    except:
+                        continue
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка общего поиска ссылок: {e}")
+        
+        # Если всё еще не найдено, делаем дополнительный скриншот для отладки
+        if not submit_clicked:
+            debug_screenshot = "/tmp/dikidi_debug_continue.png"
+            driver.save_screenshot(debug_screenshot)
+            with open(debug_screenshot, 'rb') as photo:
+                await query.message.reply_photo(
+                    photo=photo,
+                    caption="⚠️ Кнопка Continue не найдена. Скриншот для отладки"
+                )
         
         # 9. Проверяем результат
         await query.edit_message_text("🔍 Проверяю результат бронирования...")
