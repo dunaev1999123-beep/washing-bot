@@ -386,7 +386,7 @@ async def book_machine(query):
             await query.edit_message_text("❌ Не найдено доступных машин")
             raise Exception("Не найдены доступные машины")
         
-        # 4. Ищем и выбираем время
+        # 4. Ищем и выбираем ЛЮБОЕ доступное время
         await query.edit_message_text("🕒 Ищу доступное время...")
         
         time_elements = []
@@ -399,7 +399,11 @@ async def book_machine(query):
             ".booking-slot",
             "div[class*='time']",
             "button[class*='time']",
-            "a[class*='time']"
+            "a[class*='time']",
+            "div[class*='sdt']",
+            "div[class*='hour']",
+            "[class*='available']",
+            "[class*='selectable']"
         ]
         
         for selector in time_selectors:
@@ -410,22 +414,153 @@ async def book_machine(query):
             except:
                 continue
         
+        # Ищем по тексту времени (любое время с форматом ЧЧ:ММ)
+        try:
+            # Ищем все элементы на странице
+            all_elements = driver.find_elements(By.XPATH, "//*")
+            for elem in all_elements:
+                try:
+                    text = elem.text.strip()
+                    # Пропускаем пустые или слишком длинные тексты
+                    if not text or len(text) > 20:
+                        continue
+                    
+                    # Проверяем, что текст содержит двоеточие и цифры (формат времени)
+                    if ':' in text and any(char.isdigit() for char in text):
+                        # Проверяем формат времени (например, "05:00 pm", "09:00", "14:30")
+                        # Разделяем по двоеточию
+                        parts = text.split(':')
+                        if len(parts) == 2:
+                            hour_part = parts[0].strip()
+                            minute_part = parts[1].split()[0].strip() if ' ' in parts[1] else parts[1].strip()
+                            
+                            # Проверяем, что час и минуты - цифры
+                            if hour_part.isdigit() and minute_part[:2].isdigit():
+                                # Пропускаем не-времена (например, "Morning", "Day")
+                                text_lower = text.lower()
+                                if any(word in text_lower for word in ['morning', 'day', 'evening', 'night', 'weekend', 'утро', 'день', 'вечер', 'ночь', 'выходные']):
+                                    continue
+                                
+                                # Добавляем элемент в список
+                                time_elements.append(elem)
+                except:
+                    continue
+        except:
+            pass
+        
         time_text = "не указано"
         time_selected = False
         
         if time_elements:
+            # Выбираем первый доступный слот времени
             for time_elem in time_elements:
                 try:
                     current_time_text = time_elem.text.strip()
                     
+                    # Пропускаем пустые элементы
                     if not current_time_text:
                         continue
                     
-                    parent_html = time_elem.get_attribute('outerHTML')
-                    if any(indicator in parent_html.lower() for indicator in ['disabled', 'занят', 'busy', 'unavailable', 'selected']):
+                    # Проверяем, что это похоже на время
+                    if ':' not in current_time_text:
                         continue
                     
-                    driver.execute_script("arguments[0].click();", time_elem)
+                    # Пропускаем элементы, которые не являются временем
+                    time_lower = current_time_text.lower()
+                    if any(word in time_lower for word in ['morning', 'day', 'evening', 'night', 'weekend']):
+                        continue
+                    
+                    # Проверяем, не занято ли время
+                    try:
+                        # Проверяем классы элемента
+                        elem_class = time_elem.get_attribute('class') or ''
+                        if any(indicator in elem_class.lower() for indicator in ['disabled', 'busy', 'unavailable', 'booked', 'занят', 'недоступно']):
+                            continue
+                        
+                        # Проверяем родительские элементы на наличие индикаторов недоступности
+                        parent = time_elem.find_element(By.XPATH, "./..")
+                        parent_class = parent.get_attribute('class') or ''
+                        if any(indicator in parent_class.lower() for indicator in ['disabled', 'busy', 'unavailable']):
+                            continue
+                        
+                        # Проверяем стили
+                        elem_style = time_elem.get_attribute('style') or ''
+                        if 'opacity' in elem_style.lower() and ('0.5' in elem_style or '0.3' in elem_style):
+                            continue
+                    except:
+                        pass
+                    
+                    # Прокручиваем к элементу
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", time_elem)
+                    time.sleep(0.5)
+                    
+                    # Кликаем на выбранное время
+                    try:
+                        time_elem.click()
+                    except:
+                        driver.execute_script("arguments[0].click();", time_elem)
+                    
+                    time_text = current_time_text
+                    time_selected = True
+                    await query.edit_message_text(f"✅ Выбрано время: {time_text}")
+                    time.sleep(2)
+                    break
+                except Exception as e:
+                    continue
+        
+        # Если не нашли время стандартными методами, пробуем альтернативный поиск
+        if not time_selected:
+            await query.edit_message_text("🔄 Пробую альтернативный поиск времени...")
+            
+            # Ищем все кликабельные элементы, которые могут быть временными слотами
+            all_clickable = driver.find_elements(By.XPATH, 
+                "//div[contains(@class, 'sdt')] | " +
+                "//div[contains(@class, 'hour')] | " +
+                "//div[contains(@class, 'time')] | " +
+                "//button[contains(@class, 'time')] | " +
+                "//a[contains(@class, 'time')] | " +
+                "//div[@onclick] | " +
+                "//button[@onclick] | " +
+                "//a[@onclick]"
+            )
+            
+            for elem in all_clickable:
+                try:
+                    if not elem.is_displayed() or not elem.is_enabled():
+                        continue
+                    
+                    current_time_text = elem.text.strip()
+                    
+                    # Пропускаем пустые
+                    if not current_time_text:
+                        continue
+                    
+                    # Ищем время в тексте
+                    if ':' not in current_time_text:
+                        continue
+                    
+                    # Пропускаем не-времена
+                    time_lower = current_time_text.lower()
+                    if any(word in time_lower for word in ['morning', 'day', 'evening', 'night']):
+                        continue
+                    
+                    # Проверяем формат времени
+                    parts = current_time_text.split(':')
+                    if len(parts) != 2:
+                        continue
+                    
+                    if not parts[0].strip().isdigit():
+                        continue
+                    
+                    # Прокручиваем и кликаем
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+                    time.sleep(0.5)
+                    
+                    try:
+                        elem.click()
+                    except:
+                        driver.execute_script("arguments[0].click();", elem)
+                    
                     time_text = current_time_text
                     time_selected = True
                     await query.edit_message_text(f"✅ Выбрано время: {time_text}")
