@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import tempfile
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -100,7 +101,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     keyboard = [
-        [InlineKeyboardButton("🔄 Проверить доступность", callback_data='check')],
+        [InlineKeyboardButton("🔄 Проверить доступность + скриншот", callback_data='check')],
         [InlineKeyboardButton("🚀 Забронировать автомат", callback_data='book')],
         [InlineKeyboardButton("📊 Статус", callback_data='status')]
     ]
@@ -129,201 +130,283 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_status(query)
 
 async def check_availability(query):
-    """Проверка доступности сайта"""
-    await query.edit_message_text("🔍 Проверяю доступность сайта...")
+    """Проверка доступности сайта и отправка скриншота"""
+    await query.edit_message_text("📸 Захожу на сайт и делаю скриншот...")
     
     driver = None
     try:
         driver = setup_driver()
+        
+        # Переходим на сайт
         driver.get(TARGET_URL)
         
         # Ждем загрузки страницы
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
+        
+        # Даем странице полностью загрузиться (особенно JavaScript)
+        time.sleep(3)
         
         title = driver.title
         current_url = driver.current_url
         
-        await query.edit_message_text(
-            f"✅ Сайт доступен!\n\n"
+        # 1. Делаем скриншот всей страницы
+        screenshot_path = "/tmp/dikidi_screenshot.png"
+        
+        # Устанавливаем размер окна для полного скриншота
+        driver.set_window_size(1920, 1080)
+        driver.save_screenshot(screenshot_path)
+        
+        # 2. Получаем информацию о странице
+        html_content = driver.page_source[:1500]  # Первые 1500 символов HTML
+        
+        # 3. Ищем все видимые элементы на странице
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        links = driver.find_elements(By.TAG_NAME, "a")
+        divs = driver.find_elements(By.TAG_NAME, "div")
+        
+        # Создаем временный отчет
+        report = (
+            f"📊 ОТЧЕТ О СТРАНИЦЕ DIKIDI.NET\n"
+            f"────────────────────\n"
             f"📝 Заголовок: {title}\n"
             f"🔗 URL: {current_url}\n"
-            f"⏰ Время проверки: {datetime.now().strftime('%H:%M:%S')}"
+            f"📏 Размер страницы: {len(driver.page_source)} символов\n"
+            f"🎯 Элементов найдено:\n"
+            f"   • Кнопок (button): {len(buttons)}\n"
+            f"   • Полей ввода (input): {len(inputs)}\n"
+            f"   • Ссылок (a): {len(links)}\n"
+            f"   • Блоков (div): {len(divs)}\n"
+            f"⏰ Время проверки: {datetime.now().strftime('%H:%M:%S')}\n"
+            f"────────────────────\n"
+            f"Первые 200 символов HTML:\n"
+            f"{html_content[:200]}..."
         )
         
+        # Обновляем сообщение с отчетом
+        await query.edit_message_text(report)
+        
+        # 4. Отправляем скриншот в чат
+        try:
+            with open(screenshot_path, 'rb') as photo:
+                await query.message.reply_photo(
+                    photo=photo,
+                    caption=f"📸 Скриншот страницы Dikidi\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+        except Exception as photo_error:
+            await query.message.reply_text(f"❌ Не удалось отправить скриншот: {photo_error}")
+        
+        # 5. Дополнительно: отправляем информацию о найденных кнопках
+        if buttons:
+            button_info = "🔍 Найденные кнопки (первые 8):\n"
+            for i, btn in enumerate(buttons[:8]):
+                btn_text = btn.text.strip()[:30] if btn.text else "без текста"
+                btn_class = btn.get_attribute('class')[:20] if btn.get_attribute('class') else "нет класса"
+                btn_id = btn.get_attribute('id')[:15] if btn.get_attribute('id') else "нет id"
+                button_info += f"{i+1}. '{btn_text}' (id:{btn_id}, class:{btn_class})\n"
+            
+            await query.message.reply_text(button_info)
+        
+        # 6. Проверяем наличие ключевых элементов Dikidi
+        await query.message.reply_text("🔎 Ищу элементы Dikidi...")
+        
+        dikidi_elements = {
+            "Календарь": [".calendar", "[data-calendar]", "#calendar", ".date-picker"],
+            "Слоты времени": [".time-slot", ".schedule-item", "[data-time]", ".booking-slot"],
+            "Форма входа": ["#login-form", ".auth-form", "[type='password']", "input[name='password']"],
+            "Кнопка входа": ["button[type='submit']", ".login-btn", "#loginButton", "[value='Войти']"]
+        }
+        
+        found_elements = []
+        for element_name, selectors in dikidi_elements.items():
+            for selector in selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        found_elements.append(f"✅ {element_name}: найдено через '{selector}'")
+                        break
+                except:
+                    continue
+        
+        if found_elements:
+            elements_report = "📋 Найденные элементы Dikidi:\n" + "\n".join(found_elements)
+            await query.message.reply_text(elements_report[:1000])
+        else:
+            await query.message.reply_text("⚠️ Не найдено стандартных элементов Dikidi")
+            
     except Exception as e:
         logger.error(f"Ошибка при проверке сайта: {e}")
+        
+        # Пытаемся сделать скриншот даже при ошибке
+        try:
+            if driver:
+                error_screenshot = "/tmp/dikidi_error.png"
+                driver.save_screenshot(error_screenshot)
+                with open(error_screenshot, 'rb') as photo:
+                    await query.message.reply_photo(
+                        photo=photo,
+                        caption=f"❌ Ошибка при загрузке страницы\n{str(e)[:100]}"
+                    )
+        except:
+            pass
+            
         await query.edit_message_text(
-            f"❌ Ошибка при проверке сайта:\n{str(e)[:100]}..."
+            f"❌ Ошибка при проверке сайта:\n{str(e)[:300]}..."
         )
     finally:
         if driver:
             driver.quit()
 
 async def book_machine(query):
-    """Процесс бронирования автомата"""
-    await query.edit_message_text("🚀 Начинаю процесс бронирования...")
+    """Процесс бронирования автомата для dikidi.net"""
+    await query.edit_message_text("🚀 Начинаю процесс бронирования на dikidi.net...")
     
     driver = None
     try:
         driver = setup_driver()
-        driver.get(TARGET_URL)
         
-        # Ждем загрузки страницы
-        WebDriverWait(driver, 10).until(
+        # 1. Делаем скриншот ДО бронирования
+        driver.get(TARGET_URL)
+        WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        
-        # Здесь должна быть логика заполнения формы
-        # Это пример - адаптируйте под ваш сайт
-        
-        # 1. Найти кнопку бронирования (пример селектора)
-        try:
-            # Пробуем разные селекторы
-            selectors = [
-                "button.book-button",
-                "button[class*='book']",
-                "a[class*='book']",
-                ".btn-book",
-                "button:contains('Забронировать')"
-            ]
-            
-            book_button = None
-            for selector in selectors:
-                try:
-                    book_button = driver.find_element(By.CSS_SELECTOR, selector)
-                    break
-                except:
-                    continue
-            
-            if book_button:
-                book_button.click()
-                await query.edit_message_text("✅ Найдена кнопка бронирования, начинаю заполнение формы...")
-            else:
-                await query.edit_message_text("❌ Не удалось найти кнопку бронирования")
-                return
-                
-        except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка поиска кнопки: {str(e)[:100]}")
-            return
-        
-        # 2. Заполнить форму (пример)
-        time.sleep(2)
-        
-        # Ищем поля формы
-        try:
-            # Имя
-            name_selectors = ["input[name='name']", "input[name='firstname']", "#name", ".name-field"]
-            for selector in name_selectors:
-                try:
-                    name_field = driver.find_element(By.CSS_SELECTOR, selector)
-                    name_field.send_keys(FORM_NAME)
-                    break
-                except:
-                    continue
-            
-            # Фамилия
-            surname_selectors = ["input[name='surname']", "input[name='lastname']", "#surname", ".surname-field"]
-            for selector in surname_selectors:
-                try:
-                    surname_field = driver.find_element(By.CSS_SELECTOR, selector)
-                    surname_field.send_keys(FORM_SURNAME)
-                    break
-                except:
-                    continue
-            
-            # Телефон
-            phone_selectors = ["input[name='phone']", "input[type='tel']", "#phone", ".phone-field"]
-            for selector in phone_selectors:
-                try:
-                    phone_field = driver.find_element(By.CSS_SELECTOR, selector)
-                    phone_field.send_keys(FORM_PHONE)
-                    break
-                except:
-                    continue
-            
-            # Комментарий
-            comment_selectors = ["textarea[name='comment']", "textarea[name='message']", "#comment", ".comment-field"]
-            for selector in comment_selectors:
-                try:
-                    comment_field = driver.find_element(By.CSS_SELECTOR, selector)
-                    comment_field.send_keys(FORM_COMMENT)
-                    break
-                except:
-                    continue
-            
-        except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка заполнения формы: {str(e)[:100]}")
-            return
-        
-        # 3. Отправить форму
-        time.sleep(1)
-        try:
-            submit_selectors = [
-                "button[type='submit']",
-                "input[type='submit']",
-                ".submit-btn",
-                "button:contains('Отправить')",
-                "button:contains('Подтвердить')"
-            ]
-            
-            submit_button = None
-            for selector in submit_selectors:
-                try:
-                    submit_button = driver.find_element(By.CSS_SELECTOR, selector)
-                    break
-                except:
-                    continue
-            
-            if submit_button:
-                submit_button.click()
-                await query.edit_message_text("✅ Форма отправлена, ожидаю подтверждения...")
-            else:
-                await query.edit_message_text("❌ Не удалось найти кнопку отправки")
-                return
-                
-        except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка отправки формы: {str(e)[:100]}")
-            return
-        
-        # 4. Проверить успешность
         time.sleep(3)
         
-        # Ищем сообщение об успехе
-        success_indicators = [
-            "Спасибо", "Успешно", "Забронировано", "Бронирование подтверждено",
-            "success", "thank you", "booking confirmed"
+        before_screenshot = "/tmp/dikidi_before_booking.png"
+        driver.save_screenshot(before_screenshot)
+        
+        # Отправляем скриншот "до"
+        with open(before_screenshot, 'rb') as photo:
+            await query.message.reply_photo(
+                photo=photo,
+                caption="📸 Страница ДО бронирования"
+            )
+        
+        await query.edit_message_text("🔍 Анализирую страницу для бронирования...")
+        
+        # 2. Пытаемся найти элементы для бронирования
+        # Сначала ищем календарь или выбор даты
+        calendar_selectors = [
+            ".calendar", 
+            "[data-calendar]", 
+            "#calendar", 
+            ".date-picker",
+            "div[class*='date']",
+            "div[class*='calendar']"
         ]
         
-        page_text = driver.page_source.lower()
-        success = any(indicator.lower() in page_text for indicator in success_indicators)
+        calendar_found = False
+        for selector in calendar_selectors:
+            try:
+                calendar_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if calendar_elements:
+                    await query.message.reply_text(f"✅ Найден календарь: {selector}")
+                    calendar_found = True
+                    break
+            except:
+                continue
         
-        if success:
-            await query.edit_message_text(
-                f"✅ Бронирование успешно!\n\n"
-                f"👤 Имя: {FORM_NAME}\n"
-                f"👤 Фамилия: {FORM_SURNAME}\n"
-                f"📱 Телефон: {FORM_PHONE}\n"
-                f"💬 Комментарий: {FORM_COMMENT}\n"
-                f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n"
-                f"🔗 Ссылка: {TARGET_URL[:50]}..."
-            )
+        if not calendar_found:
+            await query.message.reply_text("❌ Календарь не найден. Возможно, требуется вход в систему.")
+        
+        # 3. Ищем кнопки или элементы времени
+        time_selectors = [
+            ".time-slot", 
+            ".schedule-item", 
+            "[data-time]", 
+            ".booking-slot",
+            "div[class*='time']",
+            "button[class*='slot']"
+        ]
+        
+        time_elements = []
+        for selector in time_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    time_elements.extend(elements)
+            except:
+                continue
+        
+        if time_elements:
+            time_report = f"✅ Найдено элементов времени: {len(time_elements)}\n"
+            for i, elem in enumerate(time_elements[:5]):
+                elem_text = elem.text.strip()[:20] if elem.text else "без текста"
+                time_report += f"{i+1}. '{elem_text}'...\n"
+            await query.message.reply_text(time_report)
         else:
-            # Делаем скриншот для отладки
-            screenshot_path = "/tmp/booking_debug.png"
-            driver.save_screenshot(screenshot_path)
-            
-            await query.edit_message_text(
-                f"⚠️ Бронирование завершено, но нет подтверждения.\n"
-                f"📸 Скриншот сохранен для отладки.\n"
-                f"📞 Проверьте вручную: {TARGET_URL[:50]}..."
+            await query.message.reply_text("❌ Элементы времени не найдены")
+        
+        # 4. Ищем машины/аппараты
+        machine_selectors = [
+            "[data-machine]", 
+            "[data-device]", 
+            ".machine-selector",
+            ".device-option",
+            "div[class*='machine']",
+            "button[class*='machine']"
+        ]
+        
+        machines_found = []
+        for selector in machine_selectors:
+            try:
+                machines = driver.find_elements(By.CSS_SELECTOR, selector)
+                for machine in machines:
+                    machine_text = machine.text.strip()
+                    if machine_text and any(str(num) in machine_text for num in ['1', '2', '3']):
+                        machines_found.append(f"{selector}: '{machine_text}'")
+            except:
+                continue
+        
+        if machines_found:
+            await query.message.reply_text(f"✅ Найдены машины:\n" + "\n".join(machines_found[:5]))
+        else:
+            await query.message.reply_text("❌ Машины не найдены")
+        
+        # 5. Делаем скриншот ПОСЛЕ анализа
+        after_screenshot = "/tmp/dikidi_after_analysis.png"
+        driver.save_screenshot(after_screenshot)
+        
+        with open(after_screenshot, 'rb') as photo:
+            await query.message.reply_photo(
+                photo=photo,
+                caption="📸 Страница после анализа элементов"
             )
+        
+        # 6. Финальный отчет
+        await query.edit_message_text(
+            f"📋 ОТЧЕТ О ГОТОВНОСТИ К БРОНИРОВАНИЮ:\n\n"
+            f"✅ Страница загружена\n"
+            f"✅ Скриншоты сделаны\n"
+            f"✅ Календарь: {'найден' if calendar_found else 'не найден'}\n"
+            f"✅ Слотов времени: {len(time_elements)}\n"
+            f"✅ Машин обнаружено: {len(machines_found)}\n\n"
+            f"⚠️ Для полной автоматизации бронирования требуется:\n"
+            f"1. Авторизация на сайте (логин/пароль)\n"
+            f"2. Правильные CSS-селекторы для элементов\n"
+            f"3. Тестирование на реальной странице с доступными слотами"
+        )
             
     except Exception as e:
         logger.error(f"Ошибка при бронировании: {e}")
+        
+        # Пытаемся сделать скриншот ошибки
+        try:
+            if driver:
+                error_screenshot = "/tmp/dikidi_booking_error.png"
+                driver.save_screenshot(error_screenshot)
+                with open(error_screenshot, 'rb') as photo:
+                    await query.message.reply_photo(
+                        photo=photo,
+                        caption=f"❌ Ошибка при бронировании\n{str(e)[:100]}"
+                    )
+        except:
+            pass
+            
         await query.edit_message_text(
-            f"❌ Ошибка при бронировании:\n{str(e)[:200]}..."
+            f"❌ Критическая ошибка при бронировании:\n{str(e)[:300]}..."
         )
     finally:
         if driver:
@@ -332,14 +415,21 @@ async def book_machine(query):
 async def show_status(query):
     """Показать статус бота"""
     status_text = (
-        f"📊 Статус бота:\n\n"
-        f"✅ Бот активен\n"
+        f"📊 СТАТУС БОТА:\n\n"
+        f"✅ Бот активен и работает\n"
         f"👤 Админ ID: {ADMIN_ID}\n"
         f"🔗 Целевой URL: {TARGET_URL[:50]}...\n"
         f"📱 Телефон для брони: {FORM_PHONE}\n"
+        f"👤 Имя: {FORM_NAME} {FORM_SURNAME}\n"
+        f"💬 Комментарий: {FORM_COMMENT}\n"
         f"⏰ Время сервера: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"🐍 Python: 3.11\n"
-        f"🌐 Chromium: настроен"
+        f"🌐 Chromium: настроен в headless-режиме\n\n"
+        f"🔧 Функции:\n"
+        f"• /start - меню бота\n"
+        f"• Проверка + скриншот\n"
+        f"• Анализ страницы Dikidi\n"
+        f"• Отладка элементов"
     )
     await query.edit_message_text(status_text)
 
