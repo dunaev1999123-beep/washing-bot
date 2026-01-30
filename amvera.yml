@@ -1,0 +1,18 @@
+name: washingbot 
+runtime: docker 
+ 
+build: 
+  dockerfile: Dockerfile 
+ 
+ports: 
+  - 8080 
+ 
+healthcheck: 
+  path: /health 
+  port: 8080 
+  initialDelay: 30 
+  periodSeconds: 10 
+ 
+resources: 
+  memory: 1024 
+  cpu: 500 
