@@ -203,7 +203,7 @@ async def check_availability(query):
         # Переходим на сайт
         driver.get(TARGET_URL)
         
-        # Ждем загрузки страницы (ИСПРАВЛЕНО: добавлены двойные скобки)
+        # Ждем загрузки страницы
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
@@ -336,15 +336,18 @@ async def book_machine(query):
         
         # 1. Переходим на сайт и закрываем cookies
         driver.get(TARGET_URL)
-        # ИСПРАВЛЕНО: добавлены двойные скобки
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
-        # Закрываем cookies-окно
-        cookies_closed = await handle_cookies_popup(driver)
-        if cookies_closed:
-            await query.edit_message_text("✅ Cookies-окно закрыто")
+        # Закрываем cookies-окно (более агрессивно)
+        cookies_closed = False
+        for attempt in range(3):  # 3 попытки закрыть cookies
+            if await handle_cookies_popup(driver):
+                cookies_closed = True
+                await query.message.reply_text(f"✅ Cookies-окно закрыто (попытка {attempt + 1})")
+                break
+            time.sleep(1)
         
         time.sleep(2)
         
@@ -571,41 +574,195 @@ async def book_machine(query):
             "input[name='fio']",
             "input[placeholder*='имя']",
             "input[placeholder*='Имя']",
+            "input[placeholder*='name']",  # ДОБАВЛЕНО: английский
+            "input[placeholder*='Name']",  # ДОБАВЛЕНО: английский
             "#name",
-            "#clientName"
+            "#clientName",
+            "input[type='text']",  # ДОБАВЛЕНО: общий селектор
         ]
         
-        for selector in name_selectors:
-            try:
-                name_field = driver.find_element(By.CSS_SELECTOR, selector)
-                name_field.clear()
-                name_field.send_keys(FORM_NAME)
-                await query.message.reply_text(f"✅ Заполнено имя: {FORM_NAME}")
-                name_filled = True
-                break
-            except:
-                continue
+        # Особый поиск поля "Your name*" (обязательное)
+        try:
+            # Ищем по звездочке (*) в label
+            required_name_labels = driver.find_elements(By.XPATH, 
+                "//label[contains(text(), '*') and (contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'name') or contains(translate(., 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'имя'))]"
+            )
+            
+            for label in required_name_labels:
+                try:
+                    input_id = label.get_attribute('for')
+                    if input_id:
+                        name_field = driver.find_element(By.ID, input_id)
+                    else:
+                        # Ищем ближайший input после label
+                        name_field = label.find_element(By.XPATH, "./following::input[1]")
+                    
+                    if name_field:
+                        name_field.clear()
+                        name_field.send_keys(FORM_NAME)
+                        await query.message.reply_text(f"✅ Заполнено обязательное поле имени: {FORM_NAME}")
+                        name_filled = True
+                        break
+                except:
+                    continue
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ Не удалось найти обязательное поле имени по label: {e}")
         
-        # Ищем поле фамилии (если есть)
+        # Если не нашли через label, пробуем найти поле имени по лейблу (label)
+        if not name_filled:
+            try:
+                # Ищем label с текстом "Your name*"
+                name_labels = driver.find_elements(By.XPATH, 
+                    "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'your name')]"
+                )
+                for label in name_labels:
+                    try:
+                        # Получаем связанное поле ввода
+                        input_id = label.get_attribute('for')
+                        if input_id:
+                            name_field = driver.find_element(By.ID, input_id)
+                        else:
+                            # Ищем input после label
+                            name_field = label.find_element(By.XPATH, "./following-sibling::input")
+                        
+                        if name_field:
+                            name_field.clear()
+                            name_field.send_keys(FORM_NAME)
+                            await query.message.reply_text(f"✅ Заполнено имя (через label): {FORM_NAME}")
+                            name_filled = True
+                            break
+                    except:
+                        continue
+            except:
+                pass
+        
+        # Если не нашли через label, пробуем обычные селекторы
+        if not name_filled:
+            for selector in name_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        try:
+                            # Проверяем, что это поле для имени (по placeholder или атрибутам)
+                            placeholder = elem.get_attribute('placeholder') or ''
+                            name_attr = elem.get_attribute('name') or ''
+                            
+                            if any(keyword in placeholder.lower() for keyword in ['имя', 'name', 'your name']) or \
+                               any(keyword in name_attr.lower() for keyword in ['name', 'firstname', 'fio']):
+                                
+                                name_field = elem
+                                name_field.clear()
+                                name_field.send_keys(FORM_NAME)
+                                await query.message.reply_text(f"✅ Заполнено имя (селектор: {selector}): {FORM_NAME}")
+                                name_filled = True
+                                break
+                        except:
+                            continue
+                    if name_filled:
+                        break
+                except:
+                    continue
+        
+        # Ищем поле фамилии
         surname_filled = False
         surname_selectors = [
             "input[name='surname']",
             "input[name='lastname']",
             "input[placeholder*='фамилия']",
             "input[placeholder*='Фамилия']",
-            "#surname"
+            "input[placeholder*='last name']",  # ДОБАВЛЕНО: английский
+            "input[placeholder*='Last name']",  # ДОБАВЛЕНО: английский
+            "#surname",
+            "#lastname"
         ]
         
-        for selector in surname_selectors:
+        # Пробуем найти поле фамилии по лейблу
+        try:
+            surname_labels = driver.find_elements(By.XPATH, 
+                "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'last name') or contains(translate(., 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'фамилия')]"
+            )
+            for label in surname_labels:
+                try:
+                    # Пропускаем если это label для имени
+                    label_text = label.text.lower()
+                    if 'your name' in label_text or 'имя' in label_text:
+                        continue
+                        
+                    input_id = label.get_attribute('for')
+                    if input_id:
+                        surname_field = driver.find_element(By.ID, input_id)
+                    else:
+                        surname_field = label.find_element(By.XPATH, "./following-sibling::input")
+                    
+                    if surname_field:
+                        surname_field.clear()
+                        surname_field.send_keys(FORM_SURNAME)
+                        await query.message.reply_text(f"✅ Заполнена фамилия (через label): {FORM_SURNAME}")
+                        surname_filled = True
+                        break
+                except:
+                    continue
+        except:
+            pass
+        
+        # Если не нашли через label
+        if not surname_filled:
+            for selector in surname_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        try:
+                            placeholder = elem.get_attribute('placeholder') or ''
+                            name_attr = elem.get_attribute('name') or ''
+                            
+                            if any(keyword in placeholder.lower() for keyword in ['фамилия', 'last name', 'surname']) or \
+                               any(keyword in name_attr.lower() for keyword in ['surname', 'lastname']):
+                                
+                                surname_field = elem
+                                surname_field.clear()
+                                surname_field.send_keys(FORM_SURNAME)
+                                await query.message.reply_text(f"✅ Заполнена фамилия (селектор: {selector}): {FORM_SURNAME}")
+                                surname_filled = True
+                                break
+                        except:
+                            continue
+                    if surname_filled:
+                        break
+                except:
+                    continue
+        
+        # Альтернативный метод: находим все input поля и заполняем их по порядку
+        if not name_filled or not surname_filled:
             try:
-                surname_field = driver.find_element(By.CSS_SELECTOR, selector)
-                surname_field.clear()
-                surname_field.send_keys(FORM_SURNAME)
-                await query.message.reply_text(f"✅ Заполнена фамилия: {FORM_SURNAME}")
-                surname_filled = True
-                break
-            except:
-                continue
+                all_inputs = driver.find_elements(By.TAG_NAME, "input")
+                text_inputs = []
+                
+                # Фильтруем text inputs
+                for inp in all_inputs:
+                    try:
+                        inp_type = inp.get_attribute('type') or 'text'
+                        if inp_type in ['text', 'tel'] and inp.is_displayed() and inp.is_enabled():
+                            text_inputs.append(inp)
+                    except:
+                        continue
+                
+                # Заполняем по порядку (предполагаем, что первый - имя, второй - фамилия)
+                if len(text_inputs) >= 1 and not name_filled:
+                    # Первое поле - имя
+                    text_inputs[0].clear()
+                    text_inputs[0].send_keys(FORM_NAME)
+                    name_filled = True
+                    await query.message.reply_text(f"✅ Заполнено имя (первое поле): {FORM_NAME}")
+                    
+                if len(text_inputs) >= 2 and not surname_filled:
+                    # Второе поле - фамилия
+                    text_inputs[1].clear()
+                    text_inputs[1].send_keys(FORM_SURNAME)
+                    surname_filled = True
+                    await query.message.reply_text(f"✅ Заполнена фамилия (второе поле): {FORM_SURNAME}")
+                    
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка альтернативного заполнения: {e}")
         
         # Ищем поле телефона
         phone_field = None
@@ -615,6 +772,8 @@ async def book_machine(query):
             "input[type='tel']",
             "input[placeholder*='телефон']",
             "input[placeholder*='Телефон']",
+            "input[placeholder*='phone']",  # ДОБАВЛЕНО: английский
+            "input[placeholder*='Phone']",  # ДОБАВЛЕНО: английский
             "#phone",
             "input[name='phoneNumber']",
             "input[name='mobile']"
@@ -638,8 +797,11 @@ async def book_machine(query):
             "textarea[name='message']",
             "textarea[placeholder*='комментарий']",
             "textarea[placeholder*='Комментарий']",
+            "textarea[placeholder*='comment']",  # ДОБАВЛЕНО: английский
+            "textarea[placeholder*='Comment']",  # ДОБАВЛЕНО: английский
             "#comment",
-            "textarea[name='notes']"
+            "textarea[name='notes']",
+            "textarea"  # ДОБАВЛЕНО: общий селектор
         ]
         
         for selector in comment_selectors:
@@ -653,19 +815,40 @@ async def book_machine(query):
             except:
                 continue
         
-        # 7. Ищем кнопку отправки формы
-        await query.edit_message_text("🔍 Ищу кнопку отправки формы...")
+        # После заполнения всех полей делаем паузу
+        if name_filled or surname_filled or phone_filled or comment_filled:
+            await query.message.reply_text("⏳ Проверяю заполнение формы...")
+            time.sleep(2)
+            
+            # Делаем скриншот заполненной формы
+            form_screenshot = "/tmp/dikidi_filled_form.png"
+            driver.save_screenshot(form_screenshot)
+            with open(form_screenshot, 'rb') as photo:
+                await query.message.reply_photo(
+                    photo=photo,
+                    caption="📸 Форма после заполнения"
+                )
+        
+        # 7. Ищем кнопку Continue (вместо кнопки отправки формы)
+        await query.edit_message_text("🔍 Ищу кнопку Continue...")
         
         submit_clicked = False
         submit_selectors = [
-            "button[type='submit']",
+            "button:contains('Continue')",
+            "button:contains('Продолжить')",
+            "button:contains('Далее')",
+            "button:contains('Next')",
             "button:contains('Записаться')",
             "button:contains('Подтвердить запись')",
             "button:contains('Отправить')",
             "button:contains('Забронировать')",
             "button:contains('Завершить')",
+            "button[type='submit']",
             ".btn-submit",
+            ".btn-continue",
+            ".btn-next",
             "[data-action='submit']",
+            "[data-action='continue']",
             "input[type='submit']"
         ]
         
@@ -673,30 +856,41 @@ async def book_machine(query):
             try:
                 if "contains" in selector:
                     text = selector.split("'")[1]
-                    button = driver.find_element(By.XPATH, 
+                    buttons = driver.find_elements(By.XPATH, 
                         f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]"
                     )
+                    # Также ищем input
+                    inputs = driver.find_elements(By.XPATH,
+                        f"//input[contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]"
+                    )
+                    elements = buttons + inputs
                 else:
-                    button = driver.find_element(By.CSS_SELECTOR, selector)
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
                 
-                if button.is_displayed():
-                    # Делаем скриншот перед отправкой
-                    before_submit = "/tmp/dikidi_before_submit.png"
-                    driver.save_screenshot(before_submit)
-                    
-                    # Кликаем кнопку
-                    driver.execute_script("arguments[0].click();", button)
-                    submit_clicked = True
-                    await query.message.reply_text(f"✅ Форма отправлена! Кнопка: {selector}")
-                    
-                    # Отправляем скриншот
-                    with open(before_submit, 'rb') as photo:
-                        await query.message.reply_photo(
-                            photo=photo,
-                            caption="📸 Форма перед отправкой"
-                        )
-                    
-                    time.sleep(3)
+                for elem in elements:
+                    try:
+                        if elem.is_displayed() and elem.is_enabled():
+                            # Делаем скриншот перед нажатием
+                            before_submit = "/tmp/dikidi_before_submit.png"
+                            driver.save_screenshot(before_submit)
+                            
+                            # Кликаем кнопку
+                            driver.execute_script("arguments[0].click();", elem)
+                            submit_clicked = True
+                            await query.message.reply_text(f"✅ Нажата кнопка: {elem.text if hasattr(elem, 'text') else selector}")
+                            
+                            # Отправляем скриншот
+                            with open(before_submit, 'rb') as photo:
+                                await query.message.reply_photo(
+                                    photo=photo,
+                                    caption="📸 Форма перед отправкой"
+                                )
+                            
+                            time.sleep(3)
+                            break
+                    except:
+                        continue
+                if submit_clicked:
                     break
             except:
                 continue
