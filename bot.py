@@ -100,61 +100,161 @@ async def handle_cookies_popup(driver):
         # Даем время для загрузки popup
         time.sleep(2)
         
-        # Селекторы для кнопок принятия cookies (на английском и русском)
+        # Пробуем несколько стратегий закрытия cookies
+        
+        # 1. Сначала ищем кнопку по точному ID из ошибки
+        try:
+            cookie_container = driver.find_element(By.ID, "cookie-consent")
+            accept_button = cookie_container.find_element(By.TAG_NAME, "button")
+            if accept_button.is_displayed():
+                driver.execute_script("arguments[0].click();", accept_button)
+                print("✅ Cookies-окно закрыто (по ID cookie-consent)")
+                time.sleep(1)
+                return True
+        except:
+            pass
+        
+        # 2. Ищем по классу из ошибки
+        try:
+            cookie_elements = driver.find_elements(By.CSS_SELECTOR, ".cookie-container.exit")
+            for element in cookie_elements:
+                try:
+                    buttons = element.find_elements(By.TAG_NAME, "button")
+                    for button in buttons:
+                        if button.is_displayed() and any(word in button.text.lower() for word in ['accept', 'agree', 'принять', 'согласен']):
+                            driver.execute_script("arguments[0].click();", button)
+                            print(f"✅ Cookies-окно закрыто (по классу .cookie-container.exit)")
+                            time.sleep(1)
+                            return True
+                except:
+                    continue
+        except:
+            pass
+        
+        # 3. Ищем все всплывающие окна с cookies
         cookie_selectors = [
-            "button:contains('Accept all')",
-            "button:contains('Accept All')",
-            "button:contains('Принять все')",
-            "button:contains('Согласен')",
-            "button:contains('OK')",
-            "button:contains('Принять')",
-            "[data-testid='accept-cookies']",
-            ".cookie-accept",
-            ".cookies-accept",
-            "#accept-cookies",
-            "#cookie-accept",
-            ".btn-cookie",
-            "button[class*='cookie']",
-            "button[class*='accept']"
+            "div[id*='cookie']",
+            "div[class*='cookie']",
+            "div[class*='consent']",
+            "div[data-testid*='cookie']",
+            "div[role*='dialog']",
+            "div[class*='modal'][class*='cookie']",
+            "div[class*='popup'][class*='cookie']"
         ]
         
         for selector in cookie_selectors:
             try:
-                # Пробуем найти кнопку по тексту (XPath)
-                if "contains" in selector:
-                    # Извлекаем текст из селектора
-                    text = selector.split("'")[1]
-                    button = driver.find_element(By.XPATH, f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
-                else:
-                    button = driver.find_element(By.CSS_SELECTOR, selector)
-                
-                if button.is_displayed():
-                    button.click()
-                    print(f"✅ Cookies-окно закрыто (селектор: {selector})")
-                    time.sleep(1)  # Даем время на закрытие popup
-                    return True
-            except Exception as e:
-                continue
-        
-        # Также проверяем все кнопки на странице
-        buttons = driver.find_elements(By.TAG_NAME, "button")
-        for button in buttons:
-            try:
-                btn_text = button.text.lower()
-                if any(keyword in btn_text for keyword in ['accept', 'принять', 'согласен', 'ok', 'готово']):
-                    if button.is_displayed():
-                        button.click()
-                        print(f"✅ Cookies-окно закрыто по тексту кнопки: {button.text}")
-                        time.sleep(1)
-                        return True
+                cookie_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                for cookie_element in cookie_elements:
+                    try:
+                        # Ищем кнопки внутри элемента
+                        buttons = cookie_element.find_elements(By.TAG_NAME, "button")
+                        for button in buttons:
+                            btn_text = button.text.lower()
+                            if button.is_displayed() and any(keyword in btn_text for keyword in 
+                                                              ['accept all', 'agree', 'accept cookies', 
+                                                               'принять все', 'согласен', 'ok', 'готово']):
+                                # Используем JavaScript для клика (работает даже если элемент перекрыт)
+                                driver.execute_script("arguments[0].click();", button)
+                                print(f"✅ Cookies-окно закрыто (селектор: {selector}, текст кнопки: {button.text})")
+                                time.sleep(1)
+                                return True
+                    except:
+                        continue
             except:
                 continue
+        
+        # 4. Пробуем кликнуть по Accept all с помощью JavaScript
+        try:
+            accept_buttons = driver.find_elements(By.XPATH, 
+                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept all') or "
+                "contains(translate(., 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'принять все')]"
+            )
+            
+            for button in accept_buttons:
+                if button.is_displayed():
+                    driver.execute_script("arguments[0].click();", button)
+                    print("✅ Cookies-окно закрыто (JavaScript click)")
+                    time.sleep(1)
+                    return True
+        except:
+            pass
+        
+        # 5. Пробуем просто удалить элемент cookies через JavaScript
+        try:
+            driver.execute_script("""
+                var cookies = document.querySelectorAll('div[id*="cookie"], div[class*="cookie"]');
+                for(var i = 0; i < cookies.length; i++) {
+                    cookies[i].style.display = 'none';
+                    cookies[i].parentNode.removeChild(cookies[i]);
+                }
+            """)
+            print("✅ Cookies-окно удалено через JavaScript")
+            time.sleep(1)
+            return True
+        except:
+            pass
         
         print("⚠️ Cookies-окно не найдено или уже закрыто")
         return False
         
     except Exception as e:
         print(f"⚠️ Ошибка при обработке cookies: {e}")
+        return False
+
+async def select_machine_3(driver, query):
+    """Функция для выбора Машинки 3 с обработкой возможных ошибок"""
+    try:
+        # Ищем элемент с текстом "Машинка 3"
+        machine_elements = driver.find_elements(By.XPATH, 
+            "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3') or contains(text(), 'Машина 3') or contains(text(), 'машина 3')]"
+        )
+        
+        if not machine_elements:
+            await query.message.reply_text("❌ Не найдены элементы с текстом 'Машинка 3'")
+            return False
+        
+        # Пробуем кликнуть по каждому найденному элементу
+        for i, element in enumerate(machine_elements):
+            try:
+                # Проверяем, не перекрыт ли элемент
+                if element.is_displayed():
+                    # Сначала пробуем JavaScript клик
+                    driver.execute_script("arguments[0].click();", element)
+                    await query.message.reply_text(f"✅ Кликнули на Машинку 3 через JavaScript (элемент {i+1})")
+                    time.sleep(2)
+                    
+                    # Проверяем, был ли успешным клик
+                    try:
+                        # Ищем признаки успешного выбора (например, активный класс)
+                        element_class = element.get_attribute('class') or ''
+                        if 'active' in element_class or 'selected' in element_class:
+                            await query.message.reply_text("✅ Машинка 3 успешно выбрана!")
+                        return True
+                    except:
+                        return True
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка при клике на элемент {i+1}: {str(e)[:100]}")
+                continue
+        
+        # Если не удалось кликнуть, пробуем найти родительский элемент
+        await query.message.reply_text("🔄 Пробую найти родительский элемент...")
+        for element in machine_elements:
+            try:
+                parent = element.find_element(By.XPATH, "./..")
+                if parent.is_displayed():
+                    driver.execute_script("arguments[0].click();", parent)
+                    await query.message.reply_text("✅ Кликнули на родительский элемент Машинки 3")
+                    time.sleep(2)
+                    return True
+            except:
+                continue
+        
+        await query.message.reply_text("❌ Не удалось кликнуть на Машинку 3 ни одним способом")
+        return False
+        
+    except Exception as e:
+        await query.message.reply_text(f"⚠️ Ошибка при выборе Машинки 3: {str(e)[:200]}")
         return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -336,16 +436,37 @@ async def book_machine(query):
         
         # 1. Переходим на сайт и закрываем cookies
         driver.get(TARGET_URL)
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
-        # Закрываем cookies-окно
+        # Закрываем cookies-окно с более тщательной обработкой
         cookies_closed = await handle_cookies_popup(driver)
         if cookies_closed:
-            await query.edit_message_text("✅ Cookies-окно закрыто, продолжаю...")
+            await query.edit_message_text("✅ Cookies-окно успешно закрыто, продолжаю...")
+        else:
+            await query.edit_message_text("⚠️ Cookies-окно не найдено или не закрыто, продолжаю...")
         
         time.sleep(3)
+        
+        # ПРОВЕРКА: Убедимся, что cookies действительно закрыты
+        try:
+            # Проверяем, видно ли еще cookies-окно
+            cookie_elements = driver.find_elements(By.CSS_SELECTOR, "div[id*='cookie'], div[class*='cookie'][class*='container']")
+            visible_cookies = [e for e in cookie_elements if e.is_displayed()]
+            
+            if visible_cookies:
+                await query.message.reply_text(f"⚠️ Cookies-окно все еще видно ({len(visible_cookies)} элементов)")
+                # Пробуем удалить через JavaScript еще раз
+                driver.execute_script("""
+                    document.querySelectorAll('div[id*="cookie"], div[class*="cookie"]').forEach(el => {
+                        el.style.display = 'none';
+                        el.remove();
+                    });
+                """)
+                time.sleep(1)
+        except:
+            pass
         
         # 2. Делаем скриншот ДО бронирования (после закрытия cookies)
         before_screenshot = "/tmp/dikidi_before_booking.png"
@@ -516,15 +637,17 @@ async def book_machine(query):
             )
         
         # 8. Пробуем кликнуть на машину 3 если нашли
-        if 'Машинка 3' in str(machines_found):
+        found_machine_3 = any('Машинка 3' in m for m in machines_found)
+        
+        if not found_machine_3:
+            # Проверяем напрямую поиском
+            machine3_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3')]")
+            found_machine_3 = len(machine3_elements) > 0
+        
+        if found_machine_3:
             await query.message.reply_text("🔄 Пробую выбрать Машинку 3...")
-            try:
-                # Ищем элемент с текстом "Машинка 3" и кликаем
-                machine3_element = driver.find_element(By.XPATH, "//*[contains(text(), 'Машинка 3')]")
-                machine3_element.click()
-                await query.message.reply_text("✅ Машинка 3 выбрана!")
-                time.sleep(2)
-                
+            success = await select_machine_3(driver, query)
+            if success:
                 # Делаем скриншот после выбора
                 after_click = "/tmp/dikidi_after_machine3.png"
                 driver.save_screenshot(after_click)
@@ -533,8 +656,8 @@ async def book_machine(query):
                         photo=photo,
                         caption="📸 После выбора Машинки 3"
                     )
-            except Exception as e:
-                await query.message.reply_text(f"⚠️ Не удалось выбрать Машинку 3: {e}")
+            else:
+                await query.message.reply_text("❌ Не удалось выбрать Машинку 3")
         
         # 9. Финальный отчет
         await query.edit_message_text(
@@ -545,7 +668,7 @@ async def book_machine(query):
             f"✅ Календарь: {'найден' if calendar_found else 'не найден'}\n"
             f"✅ Слотов времени: {len(time_elements)}\n"
             f"✅ Машин обнаружено: {len(machines_found)}\n"
-            f"✅ Машинка 3: {'найдена' if 'Машинка 3' in str(machines_found) else 'не найдена'}\n\n"
+            f"✅ Машинка 3: {'найдена' if found_machine_3 else 'не найдена'}\n\n"
             f"⚠️ Для полной автоматизации бронирования требуется:\n"
             f"1. Авторизация на сайте (логин/пароль)\n"
             f"2. Правильные CSS-селекторы для элементов\n"
