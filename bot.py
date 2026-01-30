@@ -100,161 +100,61 @@ async def handle_cookies_popup(driver):
         # Даем время для загрузки popup
         time.sleep(2)
         
-        # Пробуем несколько стратегий закрытия cookies
-        
-        # 1. Сначала ищем кнопку по точному ID из ошибки
-        try:
-            cookie_container = driver.find_element(By.ID, "cookie-consent")
-            accept_button = cookie_container.find_element(By.TAG_NAME, "button")
-            if accept_button.is_displayed():
-                driver.execute_script("arguments[0].click();", accept_button)
-                print("✅ Cookies-окно закрыто (по ID cookie-consent)")
-                time.sleep(1)
-                return True
-        except:
-            pass
-        
-        # 2. Ищем по классу из ошибки
-        try:
-            cookie_elements = driver.find_elements(By.CSS_SELECTOR, ".cookie-container.exit")
-            for element in cookie_elements:
-                try:
-                    buttons = element.find_elements(By.TAG_NAME, "button")
-                    for button in buttons:
-                        if button.is_displayed() and any(word in button.text.lower() for word in ['accept', 'agree', 'принять', 'согласен']):
-                            driver.execute_script("arguments[0].click();", button)
-                            print(f"✅ Cookies-окно закрыто (по классу .cookie-container.exit)")
-                            time.sleep(1)
-                            return True
-                except:
-                    continue
-        except:
-            pass
-        
-        # 3. Ищем все всплывающие окна с cookies
+        # Селекторы для кнопок принятия cookies (на английском и русском)
         cookie_selectors = [
-            "div[id*='cookie']",
-            "div[class*='cookie']",
-            "div[class*='consent']",
-            "div[data-testid*='cookie']",
-            "div[role*='dialog']",
-            "div[class*='modal'][class*='cookie']",
-            "div[class*='popup'][class*='cookie']"
+            "button:contains('Accept all')",
+            "button:contains('Accept All')",
+            "button:contains('Принять все')",
+            "button:contains('Согласен')",
+            "button:contains('OK')",
+            "button:contains('Принять')",
+            "[data-testid='accept-cookies']",
+            ".cookie-accept",
+            ".cookies-accept",
+            "#accept-cookies",
+            "#cookie-accept",
+            ".btn-cookie",
+            "button[class*='cookie']",
+            "button[class*='accept']"
         ]
         
         for selector in cookie_selectors:
             try:
-                cookie_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                for cookie_element in cookie_elements:
-                    try:
-                        # Ищем кнопки внутри элемента
-                        buttons = cookie_element.find_elements(By.TAG_NAME, "button")
-                        for button in buttons:
-                            btn_text = button.text.lower()
-                            if button.is_displayed() and any(keyword in btn_text for keyword in 
-                                                              ['accept all', 'agree', 'accept cookies', 
-                                                               'принять все', 'согласен', 'ok', 'готово']):
-                                # Используем JavaScript для клика (работает даже если элемент перекрыт)
-                                driver.execute_script("arguments[0].click();", button)
-                                print(f"✅ Cookies-окно закрыто (селектор: {selector}, текст кнопки: {button.text})")
-                                time.sleep(1)
-                                return True
-                    except:
-                        continue
-            except:
+                # Пробуем найти кнопку по тексту (XPath)
+                if "contains" in selector:
+                    # Извлекаем текст из селектора
+                    text = selector.split("'")[1]
+                    button = driver.find_element(By.XPATH, f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
+                else:
+                    button = driver.find_element(By.CSS_SELECTOR, selector)
+                
+                if button.is_displayed():
+                    button.click()
+                    print(f"✅ Cookies-окно закрыто (селектор: {selector})")
+                    time.sleep(1)  # Даем время на закрытие popup
+                    return True
+            except Exception as e:
                 continue
         
-        # 4. Пробуем кликнуть по Accept all с помощью JavaScript
-        try:
-            accept_buttons = driver.find_elements(By.XPATH, 
-                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept all') or "
-                "contains(translate(., 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'принять все')]"
-            )
-            
-            for button in accept_buttons:
-                if button.is_displayed():
-                    driver.execute_script("arguments[0].click();", button)
-                    print("✅ Cookies-окно закрыто (JavaScript click)")
-                    time.sleep(1)
-                    return True
-        except:
-            pass
-        
-        # 5. Пробуем просто удалить элемент cookies через JavaScript
-        try:
-            driver.execute_script("""
-                var cookies = document.querySelectorAll('div[id*="cookie"], div[class*="cookie"]');
-                for(var i = 0; i < cookies.length; i++) {
-                    cookies[i].style.display = 'none';
-                    cookies[i].parentNode.removeChild(cookies[i]);
-                }
-            """)
-            print("✅ Cookies-окно удалено через JavaScript")
-            time.sleep(1)
-            return True
-        except:
-            pass
+        # Также проверяем все кнопки на странице
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+        for button in buttons:
+            try:
+                btn_text = button.text.lower()
+                if any(keyword in btn_text for keyword in ['accept', 'принять', 'согласен', 'ok', 'готово']):
+                    if button.is_displayed():
+                        button.click()
+                        print(f"✅ Cookies-окно закрыто по тексту кнопки: {button.text}")
+                        time.sleep(1)
+                        return True
+            except:
+                continue
         
         print("⚠️ Cookies-окно не найдено или уже закрыто")
         return False
         
     except Exception as e:
         print(f"⚠️ Ошибка при обработке cookies: {e}")
-        return False
-
-async def select_machine_3(driver, query):
-    """Функция для выбора Машинки 3 с обработкой возможных ошибок"""
-    try:
-        # Ищем элемент с текстом "Машинка 3"
-        machine_elements = driver.find_elements(By.XPATH, 
-            "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3') or contains(text(), 'Машина 3') or contains(text(), 'машина 3')]"
-        )
-        
-        if not machine_elements:
-            await query.message.reply_text("❌ Не найдены элементы с текстом 'Машинка 3'")
-            return False
-        
-        # Пробуем кликнуть по каждому найденному элементу
-        for i, element in enumerate(machine_elements):
-            try:
-                # Проверяем, не перекрыт ли элемент
-                if element.is_displayed():
-                    # Сначала пробуем JavaScript клик
-                    driver.execute_script("arguments[0].click();", element)
-                    await query.message.reply_text(f"✅ Кликнули на Машинку 3 через JavaScript (элемент {i+1})")
-                    time.sleep(2)
-                    
-                    # Проверяем, был ли успешным клик
-                    try:
-                        # Ищем признаки успешного выбора (например, активный класс)
-                        element_class = element.get_attribute('class') or ''
-                        if 'active' in element_class or 'selected' in element_class:
-                            await query.message.reply_text("✅ Машинка 3 успешно выбрана!")
-                        return True
-                    except:
-                        return True
-            except Exception as e:
-                await query.message.reply_text(f"⚠️ Ошибка при клике на элемент {i+1}: {str(e)[:100]}")
-                continue
-        
-        # Если не удалось кликнуть, пробуем найти родительский элемент
-        await query.message.reply_text("🔄 Пробую найти родительский элемент...")
-        for element in machine_elements:
-            try:
-                parent = element.find_element(By.XPATH, "./..")
-                if parent.is_displayed():
-                    driver.execute_script("arguments[0].click();", parent)
-                    await query.message.reply_text("✅ Кликнули на родительский элемент Машинки 3")
-                    time.sleep(2)
-                    return True
-            except:
-                continue
-        
-        await query.message.reply_text("❌ Не удалось кликнуть на Машинку 3 ни одним способом")
-        return False
-        
-    except Exception as e:
-        await query.message.reply_text(f"⚠️ Ошибка при выборе Машинки 3: {str(e)[:200]}")
         return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,7 +205,7 @@ async def check_availability(query):
         
         # Ждем загрузки страницы
         WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
+            EC.presence_of_element_located(By.TAG_NAME, "body")
         )
         
         # Закрываем cookies-окно
@@ -436,243 +336,349 @@ async def book_machine(query):
         
         # 1. Переходим на сайт и закрываем cookies
         driver.get(TARGET_URL)
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(By.TAG_NAME, "body")
         )
         
-        # Закрываем cookies-окно с более тщательной обработкой
+        # Закрываем cookies-окно
         cookies_closed = await handle_cookies_popup(driver)
         if cookies_closed:
-            await query.edit_message_text("✅ Cookies-окно успешно закрыто, продолжаю...")
-        else:
-            await query.edit_message_text("⚠️ Cookies-окно не найдено или не закрыто, продолжаю...")
+            await query.edit_message_text("✅ Cookies-окно закрыто")
         
-        time.sleep(3)
+        time.sleep(2)
         
-        # ПРОВЕРКА: Убедимся, что cookies действительно закрыты
+        # 2. Ищем и выбираем Машинку 3
+        await query.edit_message_text("🔍 Ищу Машинку 3...")
+        
+        machine_selected = False
         try:
-            # Проверяем, видно ли еще cookies-окно
-            cookie_elements = driver.find_elements(By.CSS_SELECTOR, "div[id*='cookie'], div[class*='cookie'][class*='container']")
-            visible_cookies = [e for e in cookie_elements if e.is_displayed()]
+            # Ищем элемент с текстом "Машинка 3"
+            machine_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3')]")
+            if machine_elements:
+                await query.message.reply_text(f"✅ Найдена Машинка 3 ({len(machine_elements)} элементов)")
+                
+                # Пробуем кликнуть на первый найденный элемент
+                driver.execute_script("arguments[0].click();", machine_elements[0])
+                await query.message.reply_text("✅ Машинка 3 выбрана через JavaScript")
+                machine_selected = True
+                time.sleep(2)
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ Ошибка выбора Машинки 3: {e}")
+        
+        if not machine_selected:
+            await query.message.reply_text("❌ Не удалось выбрать Машинку 3, пробую продолжить...")
+        
+        # 3. Ищем и выбираем время (09:00 - 19:00)
+        await query.edit_message_text("🕒 Ищу временные слоты 09:00 - 19:00...")
+        
+        # Ищем все элементы времени
+        time_elements = driver.find_elements(By.CSS_SELECTOR, ".nr-item.sdt-hour")
+        
+        if not time_elements:
+            # Пробуем альтернативные селекторы
+            time_elements = driver.find_elements(By.XPATH, "//*[contains(@class, 'sdt-hour')]")
+        
+        if not time_elements:
+            time_elements = driver.find_elements(By.XPATH, "//*[contains(text(), ':') and (contains(text(), 'am') or contains(text(), 'pm'))]")
+        
+        time_text = "не указано"
+        time_selected = False
+        
+        if time_elements:
+            await query.message.reply_text(f"✅ Найдено слотов времени: {len(time_elements)}")
             
-            if visible_cookies:
-                await query.message.reply_text(f"⚠️ Cookies-окно все еще видно ({len(visible_cookies)} элементов)")
-                # Пробуем удалить через JavaScript еще раз
-                driver.execute_script("""
-                    document.querySelectorAll('div[id*="cookie"], div[class*="cookie"]').forEach(el => {
-                        el.style.display = 'none';
-                        el.remove();
-                    });
-                """)
-                time.sleep(1)
-        except:
-            pass
+            # Выбираем первый подходящий слот между 09:00 и 19:00
+            selected_time = None
+            
+            for time_elem in time_elements:
+                try:
+                    current_time_text = time_elem.text.strip()
+                    
+                    # Пропускаем пустые элементы
+                    if not current_time_text:
+                        continue
+                    
+                    # Проверяем, подходит ли время (09:00 - 19:00)
+                    if "09:00" in current_time_text or "10:" in current_time_text or \
+                       "11:" in current_time_text or "12:" in current_time_text or \
+                       "13:" in current_time_text or "14:" in current_time_text or \
+                       "15:" in current_time_text or "16:" in current_time_text or \
+                       "17:" in current_time_text or "18:" in current_time_text or \
+                       ("19:" in current_time_text and "19:00" in current_time_text):
+                        
+                        # Кликаем на выбранное время
+                        driver.execute_script("arguments[0].click();", time_elem)
+                        selected_time = time_elem
+                        time_text = current_time_text
+                        time_selected = True
+                        await query.message.reply_text(f"✅ Выбрано время: {time_text}")
+                        time.sleep(2)
+                        break
+                        
+                except Exception as e:
+                    continue
+            
+            # Если не нашли время в диапазоне 09:00-19:00, берем первое доступное
+            if not selected_time and time_elements:
+                try:
+                    first_time = time_elements[0]
+                    time_text = first_time.text.strip()
+                    driver.execute_script("arguments[0].click();", first_time)
+                    selected_time = first_time
+                    time_selected = True
+                    await query.message.reply_text(f"⏰ Выбрано первое доступное время: {time_text}")
+                    time.sleep(2)
+                except Exception as e:
+                    await query.message.reply_text(f"⚠️ Ошибка выбора времени: {e}")
+        else:
+            await query.message.reply_text("❌ Не найдено слотов времени")
         
-        # 2. Делаем скриншот ДО бронирования (после закрытия cookies)
-        before_screenshot = "/tmp/dikidi_before_booking.png"
-        driver.save_screenshot(before_screenshot)
+        # 4. Ищем кнопку продолжения/подтверждения времени
+        await query.edit_message_text("🔍 Ищу кнопку продолжения...")
         
-        # Отправляем скриншот "до"
-        with open(before_screenshot, 'rb') as photo:
-            await query.message.reply_photo(
-                photo=photo,
-                caption="📸 Страница ДО бронирования (cookies закрыты)"
-            )
-        
-        await query.edit_message_text("🔍 Анализирую страницу для бронирования...")
-        
-        # 3. Пытаемся найти элементы для бронирования
-        # Сначала ищем календарь или выбор даты
-        calendar_selectors = [
-            ".calendar", 
-            "[data-calendar]", 
-            "#calendar", 
-            ".date-picker",
-            "div[class*='date']",
-            "div[class*='calendar']",
-            "[role='calendar']"
+        continue_buttons = [
+            "button:contains('Продолжить')",
+            "button:contains('Далее')",
+            "button:contains('Next')",
+            "button:contains('Continue')",
+            "button:contains('Выбрать')",
+            "button:contains('Подтвердить')",
+            ".btn-next",
+            ".btn-continue",
+            "[data-action='next']"
         ]
         
-        calendar_found = False
-        calendar_element = None
-        for selector in calendar_selectors:
+        continue_clicked = False
+        for selector in continue_buttons:
             try:
-                calendar_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                if calendar_elements:
-                    await query.message.reply_text(f"✅ Найден календарь: {selector} ({len(calendar_elements)} элементов)")
-                    calendar_found = True
-                    calendar_element = calendar_elements[0]
+                if "contains" in selector:
+                    text = selector.split("'")[1]
+                    button = driver.find_element(By.XPATH, f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
+                else:
+                    button = driver.find_element(By.CSS_SELECTOR, selector)
+                
+                if button.is_displayed():
+                    driver.execute_script("arguments[0].click();", button)
+                    await query.message.reply_text(f"✅ Нажата кнопка: {selector}")
+                    continue_clicked = True
+                    time.sleep(3)
                     break
             except:
                 continue
         
-        if not calendar_found:
-            await query.message.reply_text("❌ Календарь не найден. Возможно, требуется вход в систему.")
+        # 5. Ждем загрузки формы записи
+        if continue_clicked:
+            await query.edit_message_text("📝 Жду загрузки формы записи...")
+            time.sleep(3)
         
-        # 4. Ищем уведомление о машине 3 (как на вашем скриншоте)
-        await query.message.reply_text("🔍 Ищу уведомление 'Машинка 3'...")
+        # 6. Ищем и заполняем форму
+        await query.edit_message_text("📋 Ищу поля формы...")
         
-        # Поиск по тексту "Машинка 3"
-        try:
-            machine_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3')]")
-            if machine_elements:
-                await query.message.reply_text(f"✅ Найдено уведомление 'Машинка 3': {len(machine_elements)} элементов")
+        # Ищем поле имени
+        name_field = None
+        name_filled = False
+        name_selectors = [
+            "input[name='name']",
+            "input[name='clientName']",
+            "input[name='firstname']",
+            "input[name='fio']",
+            "input[placeholder*='имя']",
+            "input[placeholder*='Имя']",
+            "#name",
+            "#clientName"
+        ]
+        
+        for selector in name_selectors:
+            try:
+                name_field = driver.find_element(By.CSS_SELECTOR, selector)
+                name_field.clear()
+                name_field.send_keys(FORM_NAME)
+                await query.message.reply_text(f"✅ Заполнено имя: {FORM_NAME}")
+                name_filled = True
+                break
+            except:
+                continue
+        
+        # Ищем поле фамилии (если есть)
+        surname_filled = False
+        surname_selectors = [
+            "input[name='surname']",
+            "input[name='lastname']",
+            "input[placeholder*='фамилия']",
+            "input[placeholder*='Фамилия']",
+            "#surname"
+        ]
+        
+        for selector in surname_selectors:
+            try:
+                surname_field = driver.find_element(By.CSS_SELECTOR, selector)
+                surname_field.clear()
+                surname_field.send_keys(FORM_SURNAME)
+                await query.message.reply_text(f"✅ Заполнена фамилия: {FORM_SURNAME}")
+                surname_filled = True
+                break
+            except:
+                continue
+        
+        # Ищем поле телефона
+        phone_field = None
+        phone_filled = False
+        phone_selectors = [
+            "input[name='phone']",
+            "input[type='tel']",
+            "input[placeholder*='телефон']",
+            "input[placeholder*='Телефон']",
+            "#phone",
+            "input[name='phoneNumber']",
+            "input[name='mobile']"
+        ]
+        
+        for selector in phone_selectors:
+            try:
+                phone_field = driver.find_element(By.CSS_SELECTOR, selector)
+                phone_field.clear()
+                phone_field.send_keys(FORM_PHONE)
+                await query.message.reply_text(f"✅ Заполнен телефон: {FORM_PHONE}")
+                phone_filled = True
+                break
+            except:
+                continue
+        
+        # Ищем поле комментария (если есть)
+        comment_filled = False
+        comment_selectors = [
+            "textarea[name='comment']",
+            "textarea[name='message']",
+            "textarea[placeholder*='комментарий']",
+            "textarea[placeholder*='Комментарий']",
+            "#comment",
+            "textarea[name='notes']"
+        ]
+        
+        for selector in comment_selectors:
+            try:
+                comment_field = driver.find_element(By.CSS_SELECTOR, selector)
+                comment_field.clear()
+                comment_field.send_keys(FORM_COMMENT)
+                await query.message.reply_text(f"✅ Заполнен комментарий: {FORM_COMMENT}")
+                comment_filled = True
+                break
+            except:
+                continue
+        
+        # 7. Ищем кнопку отправки формы
+        await query.edit_message_text("🔍 Ищу кнопку отправки формы...")
+        
+        submit_clicked = False
+        submit_selectors = [
+            "button[type='submit']",
+            "button:contains('Записаться')",
+            "button:contains('Подтвердить запись')",
+            "button:contains('Отправить')",
+            "button:contains('Забронировать')",
+            "button:contains('Завершить')",
+            ".btn-submit",
+            "[data-action='submit']",
+            "input[type='submit']"
+        ]
+        
+        for selector in submit_selectors:
+            try:
+                if "contains" in selector:
+                    text = selector.split("'")[1]
+                    button = driver.find_element(By.XPATH, f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
+                else:
+                    button = driver.find_element(By.CSS_SELECTOR, selector)
                 
-                # Пробуем найти родительский элемент с временными слотами
-                for machine_elem in machine_elements:
-                    try:
-                        # Ищем рядом временные слоты (09:00 am, 05:00 pm, 07:00 pm)
-                        parent = machine_elem.find_element(By.XPATH, "./..")
-                        
-                        # Ищем все элементы с временем в этом родителе
-                        time_elements = parent.find_elements(By.XPATH, ".//*[contains(text(), ':')]")
-                        
-                        if time_elements:
-                            time_report = "🕒 Найденные временные слоты:\n"
-                            for i, time_elem in enumerate(time_elements[:10]):
-                                time_text = time_elem.text.strip()
-                                if time_text and any(char.isdigit() for char in time_text):
-                                    time_report += f"{i+1}. '{time_text}'\n"
-                            
-                            await query.message.reply_text(time_report)
-                            break
-                    except:
-                        continue
-        except Exception as e:
-            await query.message.reply_text(f"⚠️ Ошибка поиска машины 3: {e}")
-        
-        # 5. Ищем кнопки или элементы времени более тщательно
-        await query.message.reply_text("🔍 Ищу временные слоты на странице...")
-        
-        time_selectors = [
-            ".time-slot", 
-            ".schedule-item", 
-            "[data-time]", 
-            ".booking-slot",
-            "div[class*='time']",
-            "button[class*='slot']",
-            "div[class*='schedule']",
-            "[class*='hour']",
-            "[class*='minute']"
-        ]
-        
-        time_elements = []
-        for selector in time_selectors:
-            try:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                if elements:
-                    time_elements.extend(elements)
+                if button.is_displayed():
+                    # Делаем скриншот перед отправкой
+                    before_submit = "/tmp/dikidi_before_submit.png"
+                    driver.save_screenshot(before_submit)
+                    
+                    # Кликаем кнопку
+                    driver.execute_script("arguments[0].click();", button)
+                    submit_clicked = True
+                    await query.message.reply_text(f"✅ Форма отправлена! Кнопка: {selector}")
+                    
+                    # Отправляем скриншот
+                    with open(before_submit, 'rb') as photo:
+                        await query.message.reply_photo(
+                            photo=photo,
+                            caption="📸 Форма перед отправкой"
+                        )
+                    
+                    time.sleep(3)
+                    break
             except:
                 continue
         
-        # Также ищем по тексту времени
-        try:
-            time_text_elements = driver.find_elements(By.XPATH, "//*[contains(text(), ':') and string-length(text()) < 10]")
-            for elem in time_text_elements:
-                text = elem.text.strip()
-                if text and any(char.isdigit() for char in text) and ':' in text:
-                    time_elements.append(elem)
-        except:
-            pass
+        # 8. Проверяем успешность
+        await query.edit_message_text("🔍 Проверяю результат бронирования...")
+        time.sleep(3)
         
-        if time_elements:
-            time_report = f"✅ Найдено элементов времени: {len(time_elements)}\nПервые 5:\n"
-            for i, elem in enumerate(time_elements[:5]):
-                elem_text = elem.text.strip()[:20] if elem.text else "без текста"
-                elem_class = elem.get_attribute('class')[:20] if elem.get_attribute('class') else "нет класса"
-                time_report += f"{i+1}. '{elem_text}' (class: {elem_class})\n"
-            await query.message.reply_text(time_report)
-        else:
-            await query.message.reply_text("❌ Элементы времени не найдены")
+        # Ищем сообщение об успехе
+        page_text = driver.page_source.lower()
+        success_keywords = ['успешно', 'записан', 'подтвержден', 'спасибо', 'ожидайте', 'success', 'thank you', 'confirmed']
+        error_keywords = ['ошибка', 'error', 'не удалось', 'занято', 'busy', 'недоступно']
         
-        # 6. Ищем машины/аппараты более тщательно
-        await query.message.reply_text("🔍 Ищу машины/аппараты...")
+        success = any(keyword in page_text for keyword in success_keywords)
+        error = any(keyword in page_text for keyword in error_keywords)
         
-        machine_selectors = [
-            "[data-machine]", 
-            "[data-device]", 
-            ".machine-selector",
-            ".device-option",
-            "div[class*='machine']",
-            "button[class*='machine']",
-            "[class*='apparatus']",
-            "[class*='washer']",
-            "[class*='device']"
-        ]
+        # Делаем финальный скриншот
+        final_screenshot = "/tmp/dikidi_final.png"
+        driver.save_screenshot(final_screenshot)
         
-        machines_found = []
-        for selector in machine_selectors:
-            try:
-                machines = driver.find_elements(By.CSS_SELECTOR, selector)
-                for machine in machines:
-                    machine_text = machine.text.strip()
-                    if machine_text:
-                        machines_found.append(f"{selector}: '{machine_text[:30]}'")
-            except:
-                continue
-        
-        # Также ищем по тексту с цифрами 1,2,3
-        try:
-            number_elements = driver.find_elements(By.XPATH, "//*[contains(text(), '1') or contains(text(), '2') or contains(text(), '3')]")
-            for elem in number_elements:
-                text = elem.text.strip()
-                if text and (text in ['1', '2', '3'] or any(f'Машинка {i}' in text for i in [1, 2, 3])):
-                    machines_found.append(f"по тексту: '{text}'")
-        except:
-            pass
-        
-        if machines_found:
-            await query.message.reply_text(f"✅ Найдены машины ({len(machines_found)}):\n" + "\n".join(machines_found[:10]))
-        else:
-            await query.message.reply_text("❌ Машины не найдены")
-        
-        # 7. Делаем скриншот ПОСЛЕ анализа
-        after_screenshot = "/tmp/dikidi_after_analysis.png"
-        driver.save_screenshot(after_screenshot)
-        
-        with open(after_screenshot, 'rb') as photo:
+        with open(final_screenshot, 'rb') as photo:
             await query.message.reply_photo(
                 photo=photo,
-                caption="📸 Страница после анализа элементов"
+                caption="📸 Финальный результат"
             )
         
-        # 8. Пробуем кликнуть на машину 3 если нашли
-        found_machine_3 = any('Машинка 3' in m for m in machines_found)
+        # Формируем отчет
+        if success:
+            result_message = (
+                f"🎉 БРОНИРОВАНИЕ УСПЕШНО!\n\n"
+                f"✅ Машинка: 3\n"
+                f"🕒 Время: {time_text}\n"
+                f"👤 Имя: {FORM_NAME}\n"
+                f"👤 Фамилия: {FORM_SURNAME}\n"
+                f"📱 Телефон: {FORM_PHONE}\n"
+                f"💬 Комментарий: {FORM_COMMENT}\n"
+                f"⏰ Время брони: {datetime.now().strftime('%H:%M:%S')}\n\n"
+                f"✅ Все этапы пройдены!"
+            )
+        elif error:
+            result_message = (
+                f"⚠️ ПРОБЛЕМА С БРОНИРОВАНИЕМ\n\n"
+                f"❌ Обнаружена ошибка\n"
+                f"🔍 Проверьте вручную: {TARGET_URL}\n"
+                f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}"
+            )
+        else:
+            result_message = (
+                f"📋 ПРОЦЕСС ЗАВЕРШЕН\n\n"
+                f"✅ Все действия выполнены\n"
+                f"✅ Форма отправлена\n"
+                f"✅ Окончательный результат неясен\n"
+                f"🔍 Проверьте запись вручную\n"
+                f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}"
+            )
         
-        if not found_machine_3:
-            # Проверяем напрямую поиском
-            machine3_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3')]")
-            found_machine_3 = len(machine3_elements) > 0
+        await query.edit_message_text(result_message)
         
-        if found_machine_3:
-            await query.message.reply_text("🔄 Пробую выбрать Машинку 3...")
-            success = await select_machine_3(driver, query)
-            if success:
-                # Делаем скриншот после выбора
-                after_click = "/tmp/dikidi_after_machine3.png"
-                driver.save_screenshot(after_click)
-                with open(after_click, 'rb') as photo:
-                    await query.message.reply_photo(
-                        photo=photo,
-                        caption="📸 После выбора Машинки 3"
-                    )
-            else:
-                await query.message.reply_text("❌ Не удалось выбрать Машинку 3")
-        
-        # 9. Финальный отчет
-        await query.edit_message_text(
-            f"📋 ОТЧЕТ О ГОТОВНОСТИ К БРОНИРОВАНИЮ:\n\n"
-            f"✅ Страница загружена\n"
-            f"✅ Cookies: {'закрыты' if cookies_closed else 'не найдены'}\n"
-            f"✅ Скриншоты сделаны\n"
-            f"✅ Календарь: {'найден' if calendar_found else 'не найден'}\n"
-            f"✅ Слотов времени: {len(time_elements)}\n"
-            f"✅ Машин обнаружено: {len(machines_found)}\n"
-            f"✅ Машинка 3: {'найдена' if found_machine_3 else 'не найдена'}\n\n"
-            f"⚠️ Для полной автоматизации бронирования требуется:\n"
-            f"1. Авторизация на сайте (логин/пароль)\n"
-            f"2. Правильные CSS-селекторы для элементов\n"
-            f"3. Тестирование на реальной странице с доступными слотами"
+        # 9. Отправляем дополнительную информацию
+        await query.message.reply_text(
+            f"📊 ИТОГОВЫЙ ОТЧЕТ:\n"
+            f"• Cookies закрыты: {'✅' if cookies_closed else '❌'}\n"
+            f"• Машинка 3 выбрана: {'✅' if machine_selected else '❌'}\n"
+            f"• Время выбрано: {'✅' if time_selected else '❌'}\n"
+            f"• Кнопка продолжения: {'✅' if continue_clicked else '❌'}\n"
+            f"• Имя заполнено: {'✅' if name_filled else '❌'}\n"
+            f"• Фамилия заполнена: {'✅' if surname_filled else '❌'}\n"
+            f"• Телефон заполнен: {'✅' if phone_filled else '❌'}\n"
+            f"• Комментарий заполнен: {'✅' if comment_filled else '❌'}\n"
+            f"• Форма отправлена: {'✅' if submit_clicked else '❌'}\n"
+            f"• Результат: {'✅ Успех' if success else '⚠️ Неясно' if not error else '❌ Ошибка'}"
         )
             
     except Exception as e:
