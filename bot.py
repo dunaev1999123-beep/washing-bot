@@ -203,9 +203,9 @@ async def check_availability(query):
         # Переходим на сайт
         driver.get(TARGET_URL)
         
-        # Ждем загрузки страницы
+        # Ждем загрузки страницы (ИСПРАВЛЕНО: добавлены двойные скобки)
         WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located(By.TAG_NAME, "body")
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
         # Закрываем cookies-окно
@@ -336,8 +336,9 @@ async def book_machine(query):
         
         # 1. Переходим на сайт и закрываем cookies
         driver.get(TARGET_URL)
+        # ИСПРАВЛЕНО: добавлены двойные скобки
         WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located(By.TAG_NAME, "body")
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
         # Закрываем cookies-окно
@@ -347,39 +348,130 @@ async def book_machine(query):
         
         time.sleep(2)
         
-        # 2. Ищем и выбираем Машинку 3
-        await query.edit_message_text("🔍 Ищу Машинку 3...")
+        # 2. Ищем доступные машины по приоритету: Машинка 1 -> Машинка 2 -> Машинка 3
+        await query.edit_message_text("🔍 Ищу доступные машины...")
         
-        machine_selected = False
-        try:
-            # Ищем элемент с текстом "Машинка 3"
-            machine_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Машинка 3') or contains(text(), 'машинка 3')]")
-            if machine_elements:
-                await query.message.reply_text(f"✅ Найдена Машинка 3 ({len(machine_elements)} элементов)")
+        selected_machine = None
+        machine_name = ""
+        machine_priority = ["Машинка 1", "Машинка 2", "Машинка 3"]
+        
+        for machine_text in machine_priority:
+            try:
+                # Ищем элемент с текстом машины (регистронезависимо)
+                machine_elements = driver.find_elements(By.XPATH, 
+                    f"//*[contains(translate(., 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), '{machine_text.lower()}')]"
+                )
                 
-                # Пробуем кликнуть на первый найденный элемент
-                driver.execute_script("arguments[0].click();", machine_elements[0])
-                await query.message.reply_text("✅ Машинка 3 выбрана через JavaScript")
-                machine_selected = True
-                time.sleep(2)
-        except Exception as e:
-            await query.message.reply_text(f"⚠️ Ошибка выбора Машинки 3: {e}")
+                if machine_elements:
+                    # Фильтруем только видимые элементы
+                    visible_machines = []
+                    for elem in machine_elements:
+                        try:
+                            if elem.is_displayed() and elem.is_enabled():
+                                visible_machines.append(elem)
+                        except:
+                            continue
+                    
+                    if visible_machines:
+                        selected_machine = visible_machines[0]
+                        machine_name = machine_text
+                        
+                        # Проверяем, не занята ли машина (ищем признаки недоступности)
+                        parent_html = selected_machine.get_attribute('outerHTML')
+                        if any(indicator in parent_html.lower() for indicator in ['disabled', 'занят', 'busy', 'недоступ', 'unavailable']):
+                            await query.message.reply_text(f"⚠️ {machine_text} занята, пробую следующую...")
+                            continue
+                        
+                        # Кликаем на выбранную машину
+                        driver.execute_script("arguments[0].click();", selected_machine)
+                        await query.message.reply_text(f"✅ Выбрана {machine_text}")
+                        time.sleep(2)
+                        break
+                    else:
+                        await query.message.reply_text(f"⚠️ {machine_text} не видна на странице")
+            except Exception as e:
+                await query.message.reply_text(f"⚠️ Ошибка поиска {machine_text}: {e}")
+                continue
         
-        if not machine_selected:
-            await query.message.reply_text("❌ Не удалось выбрать Машинку 3, пробую продолжить...")
+        if not selected_machine:
+            await query.message.reply_text("❌ Не найдено ни одной доступной машины")
+            # Пробуем найти любую кнопку или элемент, который может быть машиной
+            try:
+                all_buttons = driver.find_elements(By.TAG_NAME, "button")
+                all_divs = driver.find_elements(By.TAG_NAME, "div")
+                
+                for elem in all_buttons + all_divs:
+                    try:
+                        elem_text = elem.text.strip()
+                        if elem_text and ('машин' in elem_text.lower() or 'стир' in elem_text.lower()):
+                            driver.execute_script("arguments[0].click();", elem)
+                            machine_name = elem_text
+                            selected_machine = elem
+                            await query.message.reply_text(f"✅ Найдена и выбрана машина: {elem_text}")
+                            time.sleep(2)
+                            break
+                    except:
+                        continue
+            except:
+                pass
         
-        # 3. Ищем и выбираем время (09:00 - 19:00)
-        await query.edit_message_text("🕒 Ищу временные слоты 09:00 - 19:00...")
+        if not selected_machine:
+            # Делаем скриншот для отладки
+            debug_screenshot = "/tmp/dikidi_no_machines.png"
+            driver.save_screenshot(debug_screenshot)
+            with open(debug_screenshot, 'rb') as photo:
+                await query.message.reply_photo(
+                    photo=photo,
+                    caption="❌ Не найдены машины для бронирования"
+                )
+            raise Exception("Не найдены доступные машины")
         
-        # Ищем все элементы времени
-        time_elements = driver.find_elements(By.CSS_SELECTOR, ".nr-item.sdt-hour")
+        # 3. Ищем и выбираем любое доступное время
+        await query.edit_message_text("🕒 Ищу доступные временные слоты...")
         
-        if not time_elements:
-            # Пробуем альтернативные селекторы
-            time_elements = driver.find_elements(By.XPATH, "//*[contains(@class, 'sdt-hour')]")
+        time_elements = []
+        time_selectors = [
+            ".nr-item.sdt-hour",
+            "[class*='sdt-hour']",
+            "[class*='time-slot']",
+            "[class*='schedule-item']",
+            "[data-time]",
+            ".booking-slot",
+            "div[class*='time']",
+            "button[class*='time']",
+            "a[class*='time']"
+        ]
         
-        if not time_elements:
-            time_elements = driver.find_elements(By.XPATH, "//*[contains(text(), ':') and (contains(text(), 'am') or contains(text(), 'pm'))]")
+        for selector in time_selectors:
+            try:
+                found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if found_elements:
+                    time_elements.extend(found_elements)
+            except:
+                continue
+        
+        # Также ищем по XPath для текста времени
+        try:
+            time_xpath_elements = driver.find_elements(By.XPATH, 
+                "//*[contains(text(), ':') and (contains(text(), 'am') or contains(text(), 'pm') or contains(text(), '09') or contains(text(), '10') or contains(text(), '11') or contains(text(), '12') or contains(text(), '13') or contains(text(), '14') or contains(text(), '15') or contains(text(), '16') or contains(text(), '17') or contains(text(), '18') or contains(text(), '19') or contains(text(), '20') or contains(text(), '21') or contains(text(), '22') or contains(text(), '23'))]"
+            )
+            time_elements.extend(time_xpath_elements)
+        except:
+            pass
+        
+        # Удаляем дубликаты
+        unique_elements = []
+        seen_ids = set()
+        for elem in time_elements:
+            try:
+                elem_id = elem.id
+                if elem_id not in seen_ids:
+                    seen_ids.add(elem_id)
+                    unique_elements.append(elem)
+            except:
+                unique_elements.append(elem)
+        
+        time_elements = unique_elements
         
         time_text = "не указано"
         time_selected = False
@@ -387,9 +479,7 @@ async def book_machine(query):
         if time_elements:
             await query.message.reply_text(f"✅ Найдено слотов времени: {len(time_elements)}")
             
-            # Выбираем первый подходящий слот между 09:00 и 19:00
-            selected_time = None
-            
+            # Выбираем первый доступный слот времени
             for time_elem in time_elements:
                 try:
                     current_time_text = time_elem.text.strip()
@@ -398,33 +488,28 @@ async def book_machine(query):
                     if not current_time_text:
                         continue
                     
-                    # Проверяем, подходит ли время (09:00 - 19:00)
-                    if "09:00" in current_time_text or "10:" in current_time_text or \
-                       "11:" in current_time_text or "12:" in current_time_text or \
-                       "13:" in current_time_text or "14:" in current_time_text or \
-                       "15:" in current_time_text or "16:" in current_time_text or \
-                       "17:" in current_time_text or "18:" in current_time_text or \
-                       ("19:" in current_time_text and "19:00" in current_time_text):
-                        
-                        # Кликаем на выбранное время
-                        driver.execute_script("arguments[0].click();", time_elem)
-                        selected_time = time_elem
-                        time_text = current_time_text
-                        time_selected = True
-                        await query.message.reply_text(f"✅ Выбрано время: {time_text}")
-                        time.sleep(2)
-                        break
-                        
+                    # Проверяем, не занято ли время
+                    parent_html = time_elem.get_attribute('outerHTML')
+                    if any(indicator in parent_html.lower() for indicator in ['disabled', 'занят', 'busy', 'unavailable', 'selected']):
+                        continue
+                    
+                    # Кликаем на выбранное время
+                    driver.execute_script("arguments[0].click();", time_elem)
+                    time_text = current_time_text
+                    time_selected = True
+                    await query.message.reply_text(f"✅ Выбрано время: {time_text}")
+                    time.sleep(2)
+                    break
+                    
                 except Exception as e:
                     continue
             
-            # Если не нашли время в диапазоне 09:00-19:00, берем первое доступное
-            if not selected_time and time_elements:
+            if not time_selected and len(time_elements) > 0:
+                # Если все слоты кажутся занятыми, пробуем кликнуть на первый
                 try:
                     first_time = time_elements[0]
                     time_text = first_time.text.strip()
                     driver.execute_script("arguments[0].click();", first_time)
-                    selected_time = first_time
                     time_selected = True
                     await query.message.reply_text(f"⏰ Выбрано первое доступное время: {time_text}")
                     time.sleep(2)
@@ -453,7 +538,9 @@ async def book_machine(query):
             try:
                 if "contains" in selector:
                     text = selector.split("'")[1]
-                    button = driver.find_element(By.XPATH, f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
+                    button = driver.find_element(By.XPATH, 
+                        f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]"
+                    )
                 else:
                     button = driver.find_element(By.CSS_SELECTOR, selector)
                 
@@ -586,7 +673,9 @@ async def book_machine(query):
             try:
                 if "contains" in selector:
                     text = selector.split("'")[1]
-                    button = driver.find_element(By.XPATH, f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
+                    button = driver.find_element(By.XPATH, 
+                        f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]"
+                    )
                 else:
                     button = driver.find_element(By.CSS_SELECTOR, selector)
                 
@@ -638,7 +727,7 @@ async def book_machine(query):
         if success:
             result_message = (
                 f"🎉 БРОНИРОВАНИЕ УСПЕШНО!\n\n"
-                f"✅ Машинка: 3\n"
+                f"✅ Машинка: {machine_name}\n"
                 f"🕒 Время: {time_text}\n"
                 f"👤 Имя: {FORM_NAME}\n"
                 f"👤 Фамилия: {FORM_SURNAME}\n"
@@ -670,8 +759,8 @@ async def book_machine(query):
         await query.message.reply_text(
             f"📊 ИТОГОВЫЙ ОТЧЕТ:\n"
             f"• Cookies закрыты: {'✅' if cookies_closed else '❌'}\n"
-            f"• Машинка 3 выбрана: {'✅' if machine_selected else '❌'}\n"
-            f"• Время выбрано: {'✅' if time_selected else '❌'}\n"
+            f"• Машина выбрана: {'✅ ' + machine_name if selected_machine else '❌'}\n"
+            f"• Время выбрано: {'✅ ' + time_text if time_selected else '❌'}\n"
             f"• Кнопка продолжения: {'✅' if continue_clicked else '❌'}\n"
             f"• Имя заполнено: {'✅' if name_filled else '❌'}\n"
             f"• Фамилия заполнена: {'✅' if surname_filled else '❌'}\n"
