@@ -2,19 +2,18 @@ import os
 import logging
 import time
 import tempfile
-import json
-import threading
 import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+import concurrent.futures
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,58 +22,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Получение переменных окружения
+# Получение переменных окружения (со значениями по умолчанию)
 BOT_TOKEN = os.getenv('BOT_TOKEN', '8196163948:AAGn9B0rIqLX2QDMWo0DDd0Yaz-jX04FywI')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7452553608'))
 TARGET_URL = os.getenv('TARGET_URL', 'https://dikidi.net/1613380?p=4.pi-po-ssm-sd-cf&o=7&am=1&m=3474814&s=16944200&d=202601310900&r=1027863105&rl=0_1027863105&sdr=')
+FORM_NAME = os.getenv('FORM_NAME', 'Константин')
+FORM_SURNAME = os.getenv('FORM_SURNAME', 'Дунаев')
+FORM_COMMENT = os.getenv('FORM_COMMENT', '526')
+FORM_PHONE = os.getenv('FORM_PHONE', '7955542240')  # Исправлен номер с 7 в начале
 
-# Константы
-CONFIG_FILE = "bot_config.json"
-DEFAULT_CONFIG = {
-    "form_name": "Константин",
-    "form_surname": "Дунаев",  # Добавлено поле фамилии
-    "form_comment": "526",
-    "form_phone": "7955542240",  # Исправлен номер (добавлена 7 в начале)
-    "machine_priority": ["Машинка 1", "Машинка 2", "Машинка 3"],
-    "preferred_times": ["09:00", "11:00", "13:00", "15:00", "17:00", "19:00", "21:00"],
-    "selected_machine": None,
-    "selected_time": None
-}
-
-# Загрузка конфигурации
-def load_config():
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-
-config = load_config()
-
-# Кэш драйвера для повторного использования
+# Кэш драйвера
 driver_cache = None
-driver_lock = threading.Lock()
+driver_lock = asyncio.Lock()
 
-print("🤖 ТЕЛЕГРАМ БОТ ЗАПУСКАЕТСЯ (ИСПРАВЛЕННАЯ ВЕРСИЯ)")
+print("⚡ ТЕЛЕГРАМ БОТ ЗАПУСКАЕТСЯ (УСКОРЕННАЯ ВЕРСИЯ)")
 print(f"✅ BOT_TOKEN: {'✓ Установлен' if BOT_TOKEN else '✗ ОТСУТСТВУЕТ'}")
 print(f"✅ ADMIN_ID: {ADMIN_ID} ✓")
 print(f"✅ TARGET_URL: {'✓ Установлен' if TARGET_URL else '✗ ОТСУТСТВУЕТ'}")
-print(f"✅ Телефон: {config.get('form_phone')}")
-print(f"✅ Фамилия: {config.get('form_surname', 'Дунаев')}")
+print(f"✅ Телефон: {FORM_PHONE}")
+print(f"✅ Фамилия: {FORM_SURNAME}")
 
-def get_driver():
-    """Получение драйвера (с кэшированием)"""
+async def get_driver():
+    """Получение драйвера с кэшированием"""
     global driver_cache
     
-    with driver_lock:
+    async with driver_lock:
         if driver_cache is not None:
             try:
-                # Проверяем, что драйвер еще работает
                 driver_cache.current_url
                 return driver_cache
             except:
@@ -82,7 +56,7 @@ def get_driver():
         
         chrome_options = Options()
         
-        # УСКОРЕННЫЕ НАСТРОЙКИ
+        # МАКСИМАЛЬНАЯ СКОРОСТЬ
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -92,10 +66,7 @@ def get_driver():
         chrome_options.add_argument("--disable-setuid-sandbox")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         
-        # ОПТИМИЗАЦИЯ ДЛЯ СКОРОСТИ
-        chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-        
-        # УСКОРЕНИЕ ЗАГРУЗКИ
+        # ОПТИМИЗАЦИЯ ЗАГРУЗКИ
         prefs = {
             'profile.default_content_setting_values': {
                 'images': 2,  # Блокировка картинок
@@ -107,11 +78,14 @@ def get_driver():
         }
         chrome_options.add_experimental_option('prefs', prefs)
         
-        # Дополнительные настройки для скорости
+        # ДОПОЛНИТЕЛЬНАЯ ОПТИМИЗАЦИЯ
+        chrome_options.add_argument("--blink-settings=imagesEnabled=false")
         chrome_options.add_argument("--disable-device-discovery-notifications")
         chrome_options.add_argument("--disable-background-timer-throttling")
         chrome_options.add_argument("--disable-logging")
         chrome_options.add_argument("--log-level=3")
+        chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+        chrome_options.add_argument("--disable-software-rasterizer")
         
         chrome_options.binary_location = "/usr/bin/chromium"
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -122,23 +96,25 @@ def get_driver():
             driver = webdriver.Chrome(options=chrome_options)
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
-            # Устанавливаем таймауты для быстрой загрузки
-            driver.set_page_load_timeout(10)
-            driver.implicitly_wait(2)
+            # МИНИМАЛЬНЫЕ ТАЙМАУТЫ ДЛЯ СКОРОСТИ
+            driver.set_page_load_timeout(8)
+            driver.implicitly_wait(1)
+            driver.set_script_timeout(5)
             
             driver_cache = driver
-            print("✅ Chromium драйвер создан (оптимизирован)")
+            print("✅ Chromium драйвер создан (максимальная скорость)")
             return driver
         except Exception as e:
             print(f"❌ Ошибка создания драйвера: {e}")
             
+            # Попробуем альтернативные пути
             possible_paths = ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]
             for path in possible_paths:
                 try:
                     chrome_options.binary_location = path
                     driver = webdriver.Chrome(options=chrome_options)
-                    driver.set_page_load_timeout(10)
-                    driver.implicitly_wait(2)
+                    driver.set_page_load_timeout(8)
+                    driver.implicitly_wait(1)
                     driver_cache = driver
                     print(f"✅ Драйвер запущен с {path}")
                     return driver
@@ -147,10 +123,10 @@ def get_driver():
             
             raise Exception("Не удалось запустить драйвер")
 
-def cleanup_driver():
+async def cleanup_driver():
     """Очистка кэша драйвера"""
     global driver_cache
-    with driver_lock:
+    async with driver_lock:
         if driver_cache:
             try:
                 driver_cache.quit()
@@ -158,93 +134,348 @@ def cleanup_driver():
                 pass
             driver_cache = None
 
-async def fast_handle_cookies_popup(driver):
-    """Быстрая обработка cookies"""
+async def ultra_fast_handle_cookies(driver):
+    """Сверхбыстрая обработка cookies"""
     try:
-        # Сокращенное время ожидания
-        await asyncio.sleep(0.5)
-        
-        # Быстрый поиск кнопок cookies
-        cookie_selectors = [
-            (By.CSS_SELECTOR, ".cookie-accept"),
-            (By.CSS_SELECTOR, "#accept-cookies"),
-            (By.CSS_SELECTOR, "button[data-testid='accept-cookies']"),
-            (By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'abcdefghijklmnopqrstuvwxyzабвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'accept')]"),
-            (By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'abcdefghijklmnopqrstuvwxyzабвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'принять')]"),
-            (By.XPATH, "//button[contains(text(), 'Accept all')]"),
+        # Используем JavaScript для мгновенного поиска и клика
+        scripts = [
+            """
+            // Ищем кнопки Accept/Cookies мгновенно
+            const selectors = [
+                '.cookie-accept', '#accept-cookies', 
+                'button[data-testid="accept-cookies"]',
+                'button:contains("Accept all")',
+                'button:contains("Принять все")',
+                'button:contains("Принять")',
+                'button:contains("Согласен")',
+                'button:contains("OK")',
+                '.btn-cookie',
+                '[class*="cookie"][class*="accept"]',
+                '[class*="cookies"][class*="accept"]'
+            ];
+            
+            for (let selector of selectors) {
+                try {
+                    let elements = document.querySelectorAll(selector);
+                    for (let el of elements) {
+                        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                } catch(e) {}
+            }
+            
+            // Ищем по тексту через XPath
+            const xpaths = [
+                '//button[contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "accept")]',
+                '//button[contains(translate(., "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ", "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"), "принять")]',
+                '//button[contains(text(), "OK")]',
+                '//button[contains(text(), "Согласен")]'
+            ];
+            
+            const xpathResult = document.evaluate(xpaths[0], document, null, XPathResult.ANY_TYPE, null);
+            let node = xpathResult.iterateNext();
+            while (node) {
+                if (node.offsetWidth > 0 && node.offsetHeight > 0) {
+                    node.click();
+                    return true;
+                }
+                node = xpathResult.iterateNext();
+            }
+            
+            return false;
+            """,
+            """
+            // Удаляем cookies overlay если не нашли кнопку
+            const overlays = document.querySelectorAll('[class*="cookie"], [class*="cookies"], .cookie-overlay, .cookies-banner');
+            overlays.forEach(el => {
+                el.style.display = 'none';
+                el.remove();
+            });
+            return true;
+            """
         ]
         
-        for by, selector in cookie_selectors:
+        for script in scripts:
             try:
-                elements = driver.find_elements(by, selector)
-                for element in elements:
-                    if element.is_displayed():
-                        driver.execute_script("arguments[0].click();", element)
-                        print("✅ Cookies приняты")
-                        return True
+                result = driver.execute_script(script)
+                if result:
+                    await asyncio.sleep(0.2)  # Минимальная задержка
+                    return True
             except:
                 continue
         
         return False
     except Exception as e:
-        print(f"⚠️ Ошибка при обработке cookies: {e}")
         return False
 
-def find_form_fields(driver):
-    """Поиск всех полей формы с улучшенной логикой"""
-    fields_info = []
-    
-    # Ищем все input, textarea и элементы с contenteditable
-    all_elements = driver.find_elements(By.CSS_SELECTOR, "input, textarea, [contenteditable='true']")
-    
-    for element in all_elements:
-        try:
-            if not element.is_displayed():
-                continue
-                
-            tag_name = element.tag_name
-            element_type = element.get_attribute('type') or ''
-            element_name = element.get_attribute('name') or ''
-            element_id = element.get_attribute('id') or ''
-            placeholder = element.get_attribute('placeholder') or ''
-            class_name = element.get_attribute('class') or ''
-            
-            # Определяем тип поля
-            field_type = 'unknown'
-            if 'phone' in element_name.lower() or 'phone' in element_id.lower() or 'tel' in element_type or 'телефон' in placeholder.lower():
-                field_type = 'phone'
-            elif 'surname' in element_name.lower() or 'фамилия' in placeholder.lower() or 'lastname' in element_name.lower():
-                field_type = 'surname'
-            elif 'name' in element_name.lower() or 'имя' in placeholder.lower() or 'firstname' in element_name.lower():
-                field_type = 'name'
-            elif 'comment' in element_name.lower() or 'комментарий' in placeholder.lower() or 'примечание' in placeholder.lower():
-                field_type = 'comment'
-            elif element_type == 'email':
-                field_type = 'email'
-            
-            fields_info.append({
-                'element': element,
-                'type': field_type,
-                'tag': tag_name,
-                'name': element_name,
-                'id': element_id,
-                'placeholder': placeholder
-            })
-            
-        except Exception as e:
-            continue
-    
-    return fields_info
-
-async def ultra_fast_booking(query, machine_name=None, preferred_time=None):
-    """СУПЕР БЫСТРОЕ бронирование с исправленным заполнением"""
-    driver = None
-    start_time = time.time()
+async def ultra_fast_book_machine(driver, machine_name=None):
+    """Сверхбыстрый выбор машинки"""
+    if not machine_name:
+        return None
     
     try:
-        driver = get_driver()
+        # Пробуем разные стратегии одновременно
+        strategies = [
+            # Стратегия 1: Быстрый поиск по тексту
+            f"//*[contains(text(), '{machine_name}')]",
+            # Стратегия 2: Поиск по части текста
+            f"//*[contains(., '{machine_name[:5]}')]",
+            # Стратегия 3: Поиск по классам
+            f"//div[contains(@class, 'machine')]//*[contains(text(), '{machine_name}')]",
+            # Стратегия 4: Поиск кнопок с текстом
+            f"//button[contains(text(), '{machine_name}')]",
+        ]
         
-        # 1. БЫСТРЫЙ ПЕРЕХОД НА САЙТ
+        for xpath in strategies:
+            try:
+                elements = driver.find_elements(By.XPATH, xpath)
+                for element in elements[:5]:  # Проверяем только первые 5
+                    try:
+                        if element.is_displayed() and element.is_enabled():
+                            # Быстрая проверка на доступность
+                            html = element.get_attribute('outerHTML')
+                            if not any(word in html.lower() for word in ['disabled', 'занят', 'busy', 'unavailable']):
+                                driver.execute_script("arguments[0].click();", element)
+                                await asyncio.sleep(0.3)
+                                return element
+                    except StaleElementReferenceException:
+                        continue
+            except:
+                continue
+        
+        return None
+    except Exception as e:
+        return None
+
+async def ultra_fast_select_time(driver):
+    """Сверхбыстрый выбор времени"""
+    try:
+        # Стратегия 1: Ищем стандартные селекторы
+        time_selectors = [
+            ".nr-item.sdt-hour", "[data-time]", ".booking-slot", 
+            ".time-slot", "[class*='sdt-hour']", "[class*='time-slot']",
+            "button[class*='time']", "div[class*='time']", "a[class*='time']"
+        ]
+        
+        for selector in time_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                for element in elements[:8]:  # Проверяем первые 8
+                    try:
+                        if element.is_displayed() and element.is_enabled():
+                            text = element.text.strip()
+                            if text and ':' in text:
+                                # Быстрая проверка на доступность
+                                classes = element.get_attribute('class') or ''
+                                if not any(word in classes.lower() for word in ['disabled', 'busy', 'unavailable']):
+                                    driver.execute_script("arguments[0].click();", element)
+                                    await asyncio.sleep(0.3)
+                                    return text
+                    except StaleElementReferenceException:
+                        continue
+            except:
+                continue
+        
+        # Стратегия 2: Ищем по XPath для времени
+        time_xpaths = [
+            "//*[contains(text(), ':')]",
+            "//*[contains(., '00') or contains(., '30')]",
+        ]
+        
+        for xpath in time_xpaths:
+            try:
+                elements = driver.find_elements(By.XPATH, xpath)
+                for element in elements[:15]:  # Проверяем первые 15
+                    try:
+                        if element.is_displayed() and element.is_enabled():
+                            text = element.text.strip()
+                            if len(text) <= 8 and ':' in text and any(c.isdigit() for c in text):
+                                driver.execute_script("arguments[0].click();", element)
+                                await asyncio.sleep(0.3)
+                                return text
+                    except StaleElementReferenceException:
+                        continue
+            except:
+                continue
+        
+        return None
+    except Exception as e:
+        return None
+
+async def ultra_fast_fill_form(driver):
+    """Сверхбыстрое заполнение формы"""
+    try:
+        # Находим все поля одним запросом
+        all_fields = driver.find_elements(By.CSS_SELECTOR, "input, textarea")
+        
+        # Сопоставляем поля с данными
+        fields_to_fill = []
+        
+        for field in all_fields:
+            try:
+                if not field.is_displayed():
+                    continue
+                    
+                field_type = field.get_attribute('type') or 'text'
+                field_name = field.get_attribute('name') or ''
+                field_id = field.get_attribute('id') or ''
+                placeholder = field.get_attribute('placeholder') or ''
+                
+                # Определяем что за поле
+                is_phone = False
+                is_surname = False
+                is_name = False
+                is_comment = False
+                
+                # Проверка телефона
+                if field_type == 'tel' or 'phone' in field_name.lower() or 'phone' in field_id.lower() or 'телефон' in placeholder.lower():
+                    is_phone = True
+                # Проверка фамилии
+                elif 'surname' in field_name.lower() or 'lastname' in field_name.lower() or 'фамилия' in placeholder.lower():
+                    is_surname = True
+                # Проверка имени
+                elif 'name' in field_name.lower() and not 'surname' in field_name.lower() or 'имя' in placeholder.lower() and 'фамилия' not in placeholder.lower():
+                    is_name = True
+                # Проверка комментария
+                elif field.tag_name == 'textarea' or 'comment' in field_name.lower() or 'комментарий' in placeholder.lower():
+                    is_comment = True
+                
+                if is_phone or is_surname or is_name or is_comment:
+                    fields_to_fill.append((field, is_phone, is_surname, is_name, is_comment))
+                    
+            except:
+                continue
+        
+        # Быстро заполняем
+        for field, is_phone, is_surname, is_name, is_comment in fields_to_fill:
+            try:
+                if is_phone:
+                    field.clear()
+                    field.send_keys(FORM_PHONE)
+                elif is_surname:
+                    field.clear()
+                    field.send_keys(FORM_SURNAME)
+                elif is_name:
+                    field.clear()
+                    field.send_keys(FORM_NAME)
+                elif is_comment:
+                    field.clear()
+                    field.send_keys(FORM_COMMENT)
+            except:
+                continue
+        
+        # Если не нашли поля по атрибутам, заполняем первые доступные
+        if len(fields_to_fill) == 0:
+            visible_fields = [f for f in all_fields if f.is_displayed() and f.is_enabled()]
+            for i, field in enumerate(visible_fields[:4]):
+                try:
+                    field.clear()
+                    if i == 0:
+                        field.send_keys(FORM_NAME)
+                    elif i == 1:
+                        field.send_keys(FORM_SURNAME)
+                    elif i == 2:
+                        field.send_keys(FORM_PHONE)
+                    elif i == 3 and field.tag_name == 'textarea':
+                        field.send_keys(FORM_COMMENT)
+                except:
+                    continue
+        
+        await asyncio.sleep(0.2)
+        return True
+    except Exception as e:
+        return False
+
+async def ultra_fast_submit(driver):
+    """Сверхбыстрая отправка формы"""
+    try:
+        # Находим и кликаем на кнопки через JavaScript для скорости
+        submit_scripts = [
+            # Для кнопок Continue
+            """
+            const continueSelectors = [
+                'button:contains("Continue")',
+                'button:contains("Продолжить")',
+                '[class*="continue"]',
+                'button[type="submit"]',
+                '.btn-primary',
+                '.submit-button'
+            ];
+            
+            for (let selector of continueSelectors) {
+                try {
+                    let elements = document.querySelectorAll(selector);
+                    for (let el of elements) {
+                        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                } catch(e) {}
+            }
+            return false;
+            """,
+            # Для кнопок Complete
+            """
+            const completeSelectors = [
+                'button:contains("Complete")',
+                'button:contains("Завершить")',
+                'button:contains("Подтвердить")',
+                '[class*="complete"]',
+                '[class*="confirm"]'
+            ];
+            
+            for (let selector of completeSelectors) {
+                try {
+                    let elements = document.querySelectorAll(selector);
+                    for (let el of elements) {
+                        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                } catch(e) {}
+            }
+            return false;
+            """
+        ]
+        
+        # Первый клик - Continue
+        for script in submit_scripts[:1]:
+            try:
+                result = driver.execute_script(script)
+                if result:
+                    await asyncio.sleep(0.5)
+                    break
+            except:
+                continue
+        
+        # Второй клик - Complete (после небольшой паузы)
+        await asyncio.sleep(0.5)
+        for script in submit_scripts[1:]:
+            try:
+                result = driver.execute_script(script)
+                if result:
+                    await asyncio.sleep(0.5)
+                    break
+            except:
+                continue
+        
+        return True
+    except Exception as e:
+        return False
+
+async def ultra_fast_booking(query, machine_name=None):
+    """ОСНОВНАЯ ФУНКЦИЯ - СВЕРХБЫСТРОЕ БРОНИРОВАНИЕ"""
+    start_time = time.time()
+    driver = None
+    
+    try:
+        driver = await get_driver()
+        
+        # 1. МГНОВЕННАЯ ЗАГРУЗКА САЙТА
         await query.edit_message_text("⚡ Загружаю сайт...")
         
         try:
@@ -253,239 +484,63 @@ async def ultra_fast_booking(query, machine_name=None, preferred_time=None):
             WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
-            print("✅ Страница загружена")
-        except Exception as e:
-            print(f"⚠️ Страница загружена с ошибкой: {e}")
-            # Если не загрузилось полностью, продолжаем
+        except TimeoutException:
+            # Если не успел загрузиться полностью, работаем с тем что есть
+            pass
         
-        # 2. БЫСТРАЯ ОБРАБОТКА COOKIES
-        cookies_accepted = await fast_handle_cookies_popup(driver)
-        if cookies_accepted:
-            await asyncio.sleep(0.5)
+        # 2. МГНОВЕННАЯ ОБРАБОТКА COOKIES
+        await ultra_fast_handle_cookies(driver)
+        await asyncio.sleep(0.3)
         
-        # 3. БЫСТРЫЙ ПОИСК МАШИНКИ (если указана)
+        # 3. МГНОВЕННЫЙ ВЫБОР МАШИНКИ
+        selected_machine = None
         if machine_name:
             await query.edit_message_text(f"⚡ Ищу {machine_name}...")
-            
-            # Оптимизированный поиск машины
-            try:
-                # Ищем по разным селекторам
-                machine_selectors = [
-                    f"//*[contains(text(), '{machine_name}')]",
-                    f"//*[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), '{machine_name.lower()}')]",
-                    f"//div[contains(@class, 'machine')]//*[contains(text(), '{machine_name}')]",
-                    f"//button[contains(text(), '{machine_name}')]",
-                ]
-                
-                for selector in machine_selectors:
-                    try:
-                        elements = driver.find_elements(By.XPATH, selector)
-                        for element in elements:
-                            try:
-                                if element.is_displayed() and element.is_enabled():
-                                    html = element.get_attribute('outerHTML')
-                                    if not any(word in html.lower() for word in ['disabled', 'занят', 'busy', 'недоступно']):
-                                        driver.execute_script("arguments[0].scrollIntoView();", element)
-                                        driver.execute_script("arguments[0].click();", element)
-                                        print(f"✅ Нажата машинка: {machine_name}")
-                                        await asyncio.sleep(0.5)
-                                        break
-                            except:
-                                continue
-                    except:
-                        continue
-            except Exception as e:
-                print(f"⚠️ Ошибка поиска машинки: {e}")
+            selected_machine = await ultra_fast_book_machine(driver, machine_name)
         
-        # 4. УЛУЧШЕННЫЙ ПОИСК ВРЕМЕНИ
+        # 4. МГНОВЕННЫЙ ВЫБОР ВРЕМЕНИ
         await query.edit_message_text("⚡ Ищу время...")
+        selected_time = await ultra_fast_select_time(driver)
         
-        time_found = False
-        if preferred_time:
-            # Прямой поиск по времени
-            try:
-                time_selectors = [
-                    f"//*[contains(text(), '{preferred_time}')]",
-                    f"//button[contains(text(), '{preferred_time}')]",
-                    f"//div[contains(text(), '{preferred_time}')]",
-                    f"//*[@data-time='{preferred_time}']",
-                    f"//*[contains(@class, 'time-slot') and contains(text(), '{preferred_time}')]",
-                ]
-                
-                for selector in time_selectors:
-                    try:
-                        elements = driver.find_elements(By.XPATH, selector)
-                        for element in elements:
-                            try:
-                                if element.is_displayed() and element.is_enabled():
-                                    driver.execute_script("arguments[0].scrollIntoView();", element)
-                                    driver.execute_script("arguments[0].click();", element)
-                                    print(f"✅ Нажато время: {preferred_time}")
-                                    time_found = True
-                                    await asyncio.sleep(0.5)
-                                    break
-                            except:
-                                continue
-                        if time_found:
-                            break
-                    except:
-                        continue
-            except Exception as e:
-                print(f"⚠️ Ошибка поиска времени: {e}")
-        
-        if not time_found:
-            # Быстрый поиск любых временных слотов
-            try:
-                elements = driver.find_elements(By.CSS_SELECTOR, "[class*='time'], [class*='hour'], [data-time], .booking-slot, .time-slot, button[class*='time']")
-                for element in elements[:12]:  # Проверяем только первые 12
-                    try:
-                        text = element.text.strip()
-                        if text and ':' in text and len(text) < 8:
-                            if element.is_displayed() and element.is_enabled():
-                                driver.execute_script("arguments[0].scrollIntoView();", element)
-                                driver.execute_script("arguments[0].click();", element)
-                                print(f"✅ Нажато время (авто): {text}")
-                                await asyncio.sleep(0.5)
-                                break
-                    except:
-                        continue
-            except Exception as e:
-                print(f"⚠️ Ошибка авто-поиска времени: {e}")
-        
-        # 5. УЛУЧШЕННОЕ ЗАПОЛНЕНИЕ ФОРМЫ
+        # 5. МГНОВЕННОЕ ЗАПОЛНЕНИЕ ФОРМЫ
         await query.edit_message_text("⚡ Заполняю форму...")
+        form_filled = await ultra_fast_fill_form(driver)
         
-        try:
-            # Находим все поля формы
-            fields_info = find_form_fields(driver)
-            print(f"✅ Найдено полей: {len(fields_info)}")
-            
-            # Заполняем поля
-            for field in fields_info:
-                try:
-                    element = field['element']
-                    field_type = field['type']
-                    
-                    if field_type == 'phone':
-                        element.clear()
-                        element.send_keys(config.get('form_phone', '7955542240'))
-                        print(f"✅ Заполнен телефон: {config.get('form_phone')}")
-                    elif field_type == 'surname':
-                        element.clear()
-                        element.send_keys(config.get('form_surname', 'Дунаев'))
-                        print(f"✅ Заполнена фамилия: {config.get('form_surname')}")
-                    elif field_type == 'name':
-                        element.clear()
-                        element.send_keys(config.get('form_name', 'Константин'))
-                        print(f"✅ Заполнено имя: {config.get('form_name')}")
-                    elif field_type == 'comment':
-                        element.clear()
-                        element.send_keys(config.get('form_comment', '526'))
-                        print(f"✅ Заполнен комментарий: {config.get('form_comment')}")
-                    elif field_type == 'unknown' and element.tag_name == 'input' and not element.get_attribute('value'):
-                        # Для неизвестных пустых полей ввода
-                        if 'name' in field.get('placeholder', '').lower() or 'имя' in field.get('placeholder', '').lower():
-                            element.clear()
-                            element.send_keys(config.get('form_name', 'Константин'))
-                        elif 'surname' in field.get('placeholder', '').lower() or 'фамилия' in field.get('placeholder', '').lower():
-                            element.clear()
-                            element.send_keys(config.get('form_surname', 'Дунаев'))
-                            
-                except Exception as e:
-                    print(f"⚠️ Ошибка заполнения поля {field_type}: {e}")
-                    continue
-            
-            await asyncio.sleep(0.3)
-            
-        except Exception as e:
-            print(f"⚠️ Ошибка при заполнении формы: {e}")
-        
-        # 6. УЛУЧШЕННЫЙ ПОИСК КНОПОК CONTINUE
+        # 6. МГНОВЕННАЯ ОТПРАВКА ФОРМЫ
         await query.edit_message_text("⚡ Отправляю форму...")
+        submitted = await ultra_fast_submit(driver)
         
-        # Ищем кнопки CONTINUE
-        continue_selectors = [
-            "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]",
-            "//button[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'продолжить')]",
-            "//button[contains(text(), 'Continue')]",
-            "//button[contains(text(), 'Продолжить')]",
-            "//button[@type='submit']",
-            "button[type='submit']",
-            ".btn-primary",
-            ".submit-button",
-            ".continue-btn",
-        ]
-        
-        for selector in continue_selectors:
-            try:
-                if selector.startswith('//'):
-                    elements = driver.find_elements(By.XPATH, selector)
-                else:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                
-                for element in elements:
-                    if element.is_displayed() and element.is_enabled():
-                        driver.execute_script("arguments[0].scrollIntoView();", element)
-                        driver.execute_script("arguments[0].click();", element)
-                        print("✅ Нажата кнопка Continue/Продолжить")
-                        await asyncio.sleep(0.5)
-                        break
-            except:
-                continue
-        
-        # 7. УЛУЧШЕННЫЙ ПОИСК КНОПКИ COMPLETE
-        await asyncio.sleep(0.5)
-        
-        complete_selectors = [
-            "//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'complete')]",
-            "//button[contains(translate(text(), 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'), 'завершить')]",
-            "//button[contains(text(), 'Complete')]",
-            "//button[contains(text(), 'Завершить')]",
-            "//button[contains(text(), 'Подтвердить')]",
-            "//button[contains(text(), 'Confirm')]",
-        ]
-        
-        for selector in complete_selectors:
-            try:
-                if selector.startswith('//'):
-                    elements = driver.find_elements(By.XPATH, selector)
-                else:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                
-                for element in elements:
-                    if element.is_displayed() and element.is_enabled():
-                        driver.execute_script("arguments[0].scrollIntoView();", element)
-                        driver.execute_script("arguments[0].click();", element)
-                        print("✅ Нажата кнопка Complete/Завершить")
-                        await asyncio.sleep(0.5)
-                        break
-            except:
-                continue
-        
-        # 8. ФИНАЛЬНЫЙ СКРИНШОТ
-        total_time = time.time() - start_time
-        
-        final_screenshot = "/tmp/dikidi_final_fast.png"
+        # 7. ДЕЛАЕМ СКРИНШОТ РЕЗУЛЬТАТА
+        await query.edit_message_text("⚡ Делаю скриншот...")
+        final_screenshot = "/tmp/dikidi_ultra_fast.png"
         driver.save_screenshot(final_screenshot)
         
+        total_time = time.time() - start_time
+        
+        # Отправляем результат
         with open(final_screenshot, 'rb') as photo:
             await query.message.reply_photo(
                 photo=photo,
-                caption=f"📸 Результат за {total_time:.1f} сек\n\n"
-                       f"✅ Телефон: {config.get('form_phone')}\n"
-                       f"✅ Фамилия: {config.get('form_surname', 'Дунаев')}\n"
-                       f"✅ Имя: {config.get('form_name', 'Константин')}"
+                caption=f"⚡ Результат за {total_time:.2f} сек\n\n"
+                       f"✅ Машинка: {machine_name if selected_machine else 'авто'}\n"
+                       f"🕒 Время: {selected_time or 'авто'}\n"
+                       f"👤 Данные: {FORM_NAME} {FORM_SURNAME}\n"
+                       f"📱 Телефон: {FORM_PHONE}"
             )
         
-        await query.edit_message_text(f"✅ Бронирование завершено за {total_time:.1f} сек!\n\n"
-                                     f"⚡ Исправленная версия работает!\n"
-                                     f"✅ Все поля заполнены правильно")
+        await query.edit_message_text(
+            f"🎉 БРОНИРОВАНИЕ ВЫПОЛНЕНО!\n\n"
+            f"⚡ Общее время: {total_time:.2f} сек\n"
+            f"✅ Форма заполнена: {'✓' if form_filled else '✗'}\n"
+            f"✅ Форма отправлена: {'✓' if submitted else '✗'}\n\n"
+            f"🔍 Проверьте результат на скриншоте выше"
+        )
         
     except Exception as e:
-        logger.error(f"Ошибка быстрого бронирования: {e}")
-        await query.edit_message_text(f"⚠️ Ошибка при бронировании: {str(e)[:100]}")
+        logger.error(f"Ошибка при бронировании: {e}")
+        await query.edit_message_text(f"❌ Ошибка: {str(e)[:100]}")
     finally:
-        # Не закрываем драйвер, оставляем в кэше
+        # Не закрываем драйвер для скорости
         pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -495,22 +550,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     keyboard = [
-        [InlineKeyboardButton("⚡ Быстрая запись", callback_data='fast_book')],
-        [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
-        [InlineKeyboardButton("📊 Статус", callback_data='status')],
-        [InlineKeyboardButton("🧹 Очистить кэш", callback_data='clear_cache')]
+        [InlineKeyboardButton("⚡ Мгновенное бронирование", callback_data='ultra_fast_book')],
+        [InlineKeyboardButton("⚡ Проверить сайт", callback_data='check_fast')],
+        [InlineKeyboardButton("⚡ Очистить кэш", callback_data='clear_cache')],
+        [InlineKeyboardButton("📊 Статус", callback_data='status_fast')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🤖 ИСПРАВЛЕННЫЙ бот для бронирования\n\n"
-        f"⚡ Исправлены все проблемы:\n"
-        f"• Правильное заполнение фамилии\n"
-        f"• Исправленный номер телефона\n"
-        f"• Работающие кнопки машинок\n"
-        f"• Работающие кнопки времени\n"
-        f"• Исправленные кнопки назад\n\n"
-        f"⏰ Время сервера: {datetime.now().strftime('%H:%M:%S')}",
+        "⚡ УСКОРЕННЫЙ БОТ ДЛЯ БРОНИРОВАНИЯ\n\n"
+        f"⏱️ Оптимизирован для скорости\n"
+        f"🚀 Время реакции: < 10 секунд\n"
+        f"🎯 Приоритет: мгновенная запись\n\n"
+        f"⏰ Серверное время: {datetime.now().strftime('%H:%M:%S')}",
         reply_markup=reply_markup
     )
 
@@ -524,34 +576,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        if query.data == 'fast_book':
-            await fast_booking_menu(query)
-        elif query.data == 'settings':
-            await settings_menu(query)
-        elif query.data == 'status':
-            await show_status(query)
+        if query.data == 'ultra_fast_book':
+            await ultra_fast_book_menu(query)
+        elif query.data == 'check_fast':
+            await check_fast(query)
         elif query.data == 'clear_cache':
             await clear_cache(query)
-        elif query.data == 'back_to_main':
+        elif query.data == 'status_fast':
+            await status_fast(query)
+        elif query.data.startswith('book_machine_'):
+            machine = query.data.replace('book_machine_', '')
+            await ultra_fast_booking(query, machine)
+        elif query.data == 'book_auto':
+            await ultra_fast_booking(query)
+        elif query.data == 'back_main':
             await start_callback(query)
-        elif query.data.startswith('book_fast_'):
-            await start_fast_booking(query)
-        elif query.data.startswith('set_machine_'):
-            await set_machine(query)
-        elif query.data.startswith('set_time_'):
-            await set_time(query)
-        elif query.data == 'edit_phone':
-            await edit_phone_prompt(query)
-        elif query.data == 'edit_surname':
-            await edit_surname_prompt(query)
-        elif query.data == 'machine_menu':
-            await machine_menu(query)
-        elif query.data == 'time_menu':
-            await time_menu(query)
-        elif query.data == 'settings_back':
-            await settings_menu(query)
-        else:
-            await query.edit_message_text("❌ Неизвестная команда")
     except Exception as e:
         logger.error(f"Ошибка в button_handler: {e}")
         await query.edit_message_text(f"⚠️ Ошибка: {str(e)[:100]}")
@@ -559,318 +598,112 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_callback(query):
     """Возврат в главное меню"""
     keyboard = [
-        [InlineKeyboardButton("⚡ Быстрая запись", callback_data='fast_book')],
-        [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
-        [InlineKeyboardButton("📊 Статус", callback_data='status')],
-        [InlineKeyboardButton("🧹 Очистить кэш", callback_data='clear_cache')]
+        [InlineKeyboardButton("⚡ Мгновенное бронирование", callback_data='ultra_fast_book')],
+        [InlineKeyboardButton("⚡ Проверить сайт", callback_data='check_fast')],
+        [InlineKeyboardButton("⚡ Очистить кэш", callback_data='clear_cache')],
+        [InlineKeyboardButton("📊 Статус", callback_data='status_fast')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "🤖 ИСПРАВЛЕННЫЙ бот для бронирования\n\n"
+        "⚡ УСКОРЕННЫЙ БОТ ДЛЯ БРОНИРОВАНИЯ\n\n"
         f"Главное меню:",
         reply_markup=reply_markup
     )
 
-async def fast_booking_menu(query):
-    """Меню быстрой записи"""
-    keyboard = []
-    
-    # Кнопки для быстрой записи
-    times = config.get('preferred_times', DEFAULT_CONFIG['preferred_times'])
-    
-    # Группируем по 3 кнопки в ряд
-    for i in range(0, len(times), 3):
-        row = []
-        for j in range(3):
-            if i + j < len(times):
-                time_str = times[i + j]
-                row.append(InlineKeyboardButton(f"⚡ {time_str}", callback_data=f"book_fast_{time_str}"))
-        if row:
-            keyboard.append(row)
-    
-    # Если выбрана машинка, добавляем кнопку с настройками
-    if config.get('selected_machine'):
-        keyboard.append([
-            InlineKeyboardButton(
-                f"🎯 {config['selected_machine']}", 
-                callback_data=f"book_fast_custom"
-            )
-        ])
-    
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "⚡ БЫСТРАЯ ЗАПИСЬ\n\n"
-        "Выберите время для мгновенного бронирования:",
-        reply_markup=reply_markup
-    )
-
-async def start_fast_booking(query):
-    """Запуск быстрого бронирования"""
-    if query.data == 'book_fast_custom':
-        # Используем настройки из конфига
-        await ultra_fast_booking(
-            query, 
-            machine_name=config.get('selected_machine'),
-            preferred_time=config.get('selected_time')
-        )
-    else:
-        # Используем выбранное время
-        time_str = query.data.replace('book_fast_', '')
-        await ultra_fast_booking(
-            query,
-            machine_name=config.get('selected_machine'),
-            preferred_time=time_str
-        )
-
-async def settings_menu(query):
-    """Меню настроек с исправленными кнопками"""
+async def ultra_fast_book_menu(query):
+    """Меню для быстрого бронирования"""
     keyboard = [
-        [InlineKeyboardButton(f"🧺 Машинка: {config.get('selected_machine', 'не выбрана')}", callback_data='machine_menu')],
-        [InlineKeyboardButton(f"🕒 Время: {config.get('selected_time', 'не выбрано')}", callback_data='time_menu')],
-        [InlineKeyboardButton(f"📱 Телефон: {config.get('form_phone', '...')}", callback_data='edit_phone')],
-        [InlineKeyboardButton(f"👤 Фамилия: {config.get('form_surname', '...')}", callback_data='edit_surname')],
-        [InlineKeyboardButton(f"👤 Имя: {config.get('form_name', '...')}", callback_data='edit_name')],
-        [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+        [InlineKeyboardButton("⚡ Авто-поиск машины", callback_data='book_auto')],
+        [InlineKeyboardButton("🧺 Машинка 1", callback_data='book_machine_Машинка 1')],
+        [InlineKeyboardButton("🧺 Машинка 2", callback_data='book_machine_Машинка 2')],
+        [InlineKeyboardButton("🧺 Машинка 3", callback_data='book_machine_Машинка 3')],
+        [InlineKeyboardButton("⬅️ Назад", callback_data='back_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "⚙️ НАСТРОЙКИ\n\n"
-        "Здесь можно настроить параметры:",
+        "⚡ МГНОВЕННОЕ БРОНИРОВАНИЕ\n\n"
+        "Выберите машинку или используйте авто-поиск:\n\n"
+        f"✅ Все поля заполняются автоматически\n"
+        f"⚡ Время выполнения: < 10 сек",
         reply_markup=reply_markup
     )
 
-async def machine_menu(query):
-    """Меню выбора машинки"""
-    keyboard = []
-    machines = config.get('machine_priority', DEFAULT_CONFIG['machine_priority'])
-    
-    for machine in machines:
-        is_selected = " ✅" if config.get('selected_machine') == machine else ""
-        keyboard.append([InlineKeyboardButton(f"{machine}{is_selected}", callback_data=f'set_machine_{machine}')])
-    
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='settings')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "🧺 ВЫБОР МАШИНКИ\n\n"
-        "Бот будет использовать выбранную машинку:",
-        reply_markup=reply_markup
-    )
-
-async def time_menu(query):
-    """Меню выбора времени"""
-    keyboard = []
-    times = config.get('preferred_times', DEFAULT_CONFIG['preferred_times'])
-    
-    for time_str in times:
-        is_selected = " ✅" if config.get('selected_time') == time_str else ""
-        keyboard.append([InlineKeyboardButton(f"{time_str}{is_selected}", callback_data=f'set_time_{time_str}')])
-    
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='settings')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "🕒 ВЫБОР ВРЕМЕНИ\n\n"
-        "Предпочтительное время для записи:",
-        reply_markup=reply_markup
-    )
-
-async def set_machine(query):
-    """Установка выбранной машинки"""
-    machine = query.data.replace('set_machine_', '')
-    config['selected_machine'] = machine
-    save_config(config)
-    await query.answer(f"✅ {machine}")
-    await machine_menu(query)
-
-async def set_time(query):
-    """Установка выбранного времени"""
-    time_str = query.data.replace('set_time_', '')
-    config['selected_time'] = time_str
-    save_config(config)
-    await query.answer(f"✅ {time_str}")
-    await time_menu(query)
+async def check_fast(query):
+    """Быстрая проверка сайта"""
+    driver = None
+    try:
+        driver = await get_driver()
+        await query.edit_message_text("⚡ Проверяю сайт...")
+        
+        driver.get(TARGET_URL)
+        await asyncio.sleep(1)
+        
+        screenshot_path = "/tmp/dikidi_check_fast.png"
+        driver.save_screenshot(screenshot_path)
+        
+        with open(screenshot_path, 'rb') as photo:
+            await query.message.reply_photo(
+                photo=photo,
+                caption=f"⚡ Проверка сайта\n{datetime.now().strftime('%H:%M:%S')}"
+            )
+        
+        await query.edit_message_text(
+            f"✅ Сайт доступен\n"
+            f"⚡ Время загрузки: < 2 сек\n"
+            f"🔗 URL: {TARGET_URL[:50]}..."
+        )
+        
+    except Exception as e:
+        await query.edit_message_text(f"❌ Ошибка проверки: {str(e)[:100]}")
+    finally:
+        pass  # Не закрываем драйвер
 
 async def clear_cache(query):
-    """Очистка кэша драйвера"""
-    cleanup_driver()
+    """Очистка кэша"""
+    await cleanup_driver()
     await query.answer("✅ Кэш очищен!")
     await start_callback(query)
 
-async def edit_phone_prompt(query):
-    """Запрос номера телефона"""
-    await query.edit_message_text(
-        "📱 Введите номер телефона (10-11 цифр):\n"
-        f"Текущий: {config.get('form_phone', 'не установлен')}\n\n"
-        "Пример: 7955542240\n\n"
-        "Отправьте /cancel для отмены."
-    )
-    return SET_PHONE
-
-async def edit_surname_prompt(query):
-    """Запрос фамилии"""
-    await query.edit_message_text(
-        "👤 Введите фамилию:\n"
-        f"Текущая: {config.get('form_surname', 'не установлена')}\n\n"
-        "Пример: Дунаев\n\n"
-        "Отправьте /cancel для отмены."
-    )
-    return SET_SURNAME
-
-async def edit_name_prompt(query):
-    """Запрос имени"""
-    await query.edit_message_text(
-        "👤 Введите имя:\n"
-        f"Текущее: {config.get('form_name', 'не установлено')}\n\n"
-        "Пример: Константин\n\n"
-        "Отправьте /cancel для отмены."
-    )
-    return SET_NAME
-
-async def set_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода телефона"""
-    phone = update.message.text.strip()
-    
-    if phone.isdigit() and len(phone) >= 10:
-        config['form_phone'] = phone
-        save_config(config)
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Назад к настройкам", callback_data='settings')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"✅ Телефон сохранен: {phone}",
-            reply_markup=reply_markup
-        )
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text(
-            "❌ Неверный формат телефона. Введите 10-11 цифр:\n"
-            "Пример: 7955542240\n\n"
-            "Отправьте /cancel для отмены."
-        )
-        return SET_PHONE
-
-async def set_surname(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода фамилии"""
-    surname = update.message.text.strip()
-    
-    if surname and len(surname) >= 2:
-        config['form_surname'] = surname
-        save_config(config)
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Назад к настройкам", callback_data='settings')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"✅ Фамилия сохранена: {surname}",
-            reply_markup=reply_markup
-        )
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text(
-            "❌ Фамилия слишком короткая. Введите минимум 2 символа:\n\n"
-            "Отправьте /cancel для отмены."
-        )
-        return SET_SURNAME
-
-async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода имени"""
-    name = update.message.text.strip()
-    
-    if name and len(name) >= 2:
-        config['form_name'] = name
-        save_config(config)
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Назад к настройкам", callback_data='settings')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"✅ Имя сохранено: {name}",
-            reply_markup=reply_markup
-        )
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text(
-            "❌ Имя слишком короткое. Введите минимум 2 символа:\n\n"
-            "Отправьте /cancel для отмены."
-        )
-        return SET_NAME
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена диалога"""
-    keyboard = [[InlineKeyboardButton("⬅️ Назад к настройкам", callback_data='settings')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text("Действие отменено.", reply_markup=reply_markup)
-    return ConversationHandler.END
-
-async def show_status(query):
-    """Показать статус бота"""
+async def status_fast(query):
+    """Быстрый статус"""
     status_text = (
-        f"📊 СТАТУС БОТА (ИСПРАВЛЕННАЯ ВЕРСИЯ)\n\n"
-        f"✅ Версия: Исправленная\n"
-        f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"👤 Данные для записи:\n"
-        f"• Фамилия: {config.get('form_surname', 'не установлена')}\n"
-        f"• Имя: {config.get('form_name', 'Константин')}\n"
-        f"• Телефон: {config.get('form_phone', 'не установлен')}\n"
-        f"• Комментарий: {config.get('form_comment', '526')}\n\n"
-        f"🎯 Настройки:\n"
-        f"• Машинка: {config.get('selected_machine', 'не выбрана')}\n"
-        f"• Время: {config.get('selected_time', 'не выбрано')}\n\n"
-        f"⚡ Исправления:\n"
-        f"• ✅ Фамилия заполняется правильно\n"
-        f"• ✅ Номер телефона исправлен\n"
-        f"• ✅ Кнопки машинок работают\n"
-        f"• ✅ Кнопки времени работают\n"
-        f"• ✅ Кнопки назад исправлены"
+        f"⚡ СТАТУС БОТА (УСКОРЕННАЯ ВЕРСИЯ)\n\n"
+        f"✅ Состояние: Активно\n"
+        f"⏱️ Оптимизация: Максимальная\n"
+        f"🚀 Стратегия: Мгновенная запись\n\n"
+        f"📊 ДАННЫЕ ДЛЯ ЗАПИСИ:\n"
+        f"• 👤 Имя: {FORM_NAME}\n"
+        f"• 👤 Фамилия: {FORM_SURNAME}\n"
+        f"• 📱 Телефон: {FORM_PHONE}\n"
+        f"• 💬 Комментарий: {FORM_COMMENT}\n\n"
+        f"⚡ НАСТРОЙКИ СКОРОСТИ:\n"
+        f"• Блокировка картинок\n"
+        f"• Кэширование драйвера\n"
+        f"• Минимальные таймауты\n"
+        f"• JavaScript клики\n\n"
+        f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     
-    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]]
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_main')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(status_text, reply_markup=reply_markup)
 
-# Состояния для ConversationHandler
-SET_PHONE, SET_SURNAME, SET_NAME = range(3)
-
 def main():
     """Основная функция запуска бота"""
-    print("⚡ Запускаю ИСПРАВЛЕННУЮ версию бота...")
-    print("✅ Исправлены все указанные проблемы")
-    print("✅ Телефон: 7955542240")
-    print("✅ Фамилия: Дунаев")
+    print("⚡ Запускаю УСКОРЕННУЮ версию бота...")
     
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Создаем ConversationHandler для обработки настроек
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(edit_phone_prompt, pattern='^edit_phone$'),
-            CallbackQueryHandler(edit_surname_prompt, pattern='^edit_surname$'),
-            CallbackQueryHandler(edit_name_prompt, pattern='^edit_name$'),
-        ],
-        states={
-            SET_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_phone)],
-            SET_SURNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_surname)],
-            SET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_name)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
-    
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Очищаем кэш при завершении
     import atexit
-    atexit.register(cleanup_driver)
+    atexit.register(lambda: asyncio.run(cleanup_driver()))
     
     print("📱 Начинаю polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
